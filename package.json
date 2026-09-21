@@ -3,7 +3,6 @@
   "displayName": "ReMem: AI Memory & Token Optimization Engine",
   "description": "Local RAG middleman, state manager, and token optimization engine for AI coding agents.",
   "version": "0.1.0",
-  "type": "module",
   "publisher": "RudreshGaonkar",
   "license": "MIT",
   "repository": {
@@ -100,7 +99,7 @@
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
     "build": "tsc -p ./",
-    "package": "npx @vscode/vsce package --no-dependencies"
+    "package": "npx @vscode/vsce package"
   },
   "dependencies": {
     "@orama/orama": "^2.0.23",
