@@ -1,15 +1,5 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import {
-  create,
-  insert,
-  search,
-  remove,
-  save,
-  load,
-  count,
-  AnyOrama,
-} from '@orama/orama';
 
 export interface OramaSummaryDoc {
   id?: string;
@@ -28,11 +18,23 @@ export interface SearchHitResult {
   };
 }
 
+// Holds dynamically loaded Orama module functions (compatible with CommonJS runtime)
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let oramaModule: any = null;
+
+async function getOramaModule() {
+  if (!oramaModule) {
+    oramaModule = await import('@orama/orama');
+  }
+  return oramaModule;
+}
+
 /**
  * Manages local embedded semantic and full-text search using @orama/orama.
  */
 export class VectorSearchEngine {
-  private orama: AnyOrama | null = null;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private orama: any = null;
   private indexPath: string;
   private fileIdMap: Map<string, string> = new Map(); // filePath -> orama internal ID
 
@@ -44,6 +46,8 @@ export class VectorSearchEngine {
    * Initializes the Orama search database and restores index from disk if present.
    */
   public async initialize(): Promise<void> {
+    const { create, load } = await getOramaModule();
+
     const schema = {
       filePath: 'string',
       relativePath: 'string',
@@ -77,6 +81,8 @@ export class VectorSearchEngine {
       throw new Error('Vector index is not initialized.');
     }
 
+    const { insert } = await getOramaModule();
+
     // Remove previous version if indexed
     await this.removeSummary(doc.filePath);
 
@@ -97,6 +103,7 @@ export class VectorSearchEngine {
       return;
     }
 
+    const { remove } = await getOramaModule();
     const existingId = this.fileIdMap.get(filePath);
     if (existingId) {
       try {
@@ -116,6 +123,8 @@ export class VectorSearchEngine {
       return [];
     }
 
+    const { search } = await getOramaModule();
+
     const searchResults = await search(this.orama, {
       term,
       limit,
@@ -123,10 +132,11 @@ export class VectorSearchEngine {
       threshold: 0.2,
     });
 
-    return searchResults.hits.map((hit) => ({
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return searchResults.hits.map((hit: any) => ({
       id: hit.id,
       score: hit.score,
-      document: hit.document as unknown as {
+      document: hit.document as {
         filePath: string;
         relativePath: string;
         summary: string;
@@ -141,6 +151,7 @@ export class VectorSearchEngine {
     if (!this.orama) {
       return 0;
     }
+    const { count } = await getOramaModule();
     return count(this.orama);
   }
 
@@ -152,6 +163,7 @@ export class VectorSearchEngine {
       return;
     }
 
+    const { save } = await getOramaModule();
     const oramaData = await save(this.orama);
     const serialized = JSON.stringify({
       oramaData,

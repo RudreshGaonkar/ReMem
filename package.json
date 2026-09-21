@@ -3,6 +3,7 @@
   "displayName": "ReMem: AI Memory & Token Optimization Engine",
   "description": "Local RAG middleman, state manager, and token optimization engine for AI coding agents.",
   "version": "0.1.0",
+  "icon": "icon.png",
   "publisher": "RudreshGaonkar",
   "license": "MIT",
   "repository": {
