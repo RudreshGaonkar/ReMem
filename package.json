@@ -1,0 +1,117 @@
+{
+  "name": "remem-context-engine",
+  "displayName": "ReMem: AI Memory & Token Optimization Engine",
+  "description": "Local RAG middleman, state manager, and token optimization engine for AI coding agents.",
+  "version": "0.1.0",
+  "type": "module",
+  "publisher": "RudreshGaonkar",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/RudreshGaonkar/ReMem"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Machine Learning",
+    "Other"
+  ],
+  "main": "./out/extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "remem.status",
+        "title": "ReMem: Check Context Engine Status"
+      },
+      {
+        "command": "remem.showScratchpad",
+        "title": "ReMem: Open Active Scratchpad"
+      },
+      {
+        "command": "remem.searchSummaries",
+        "title": "ReMem: Search Context Summaries"
+      },
+      {
+        "command": "remem.reindexWorkspace",
+        "title": "ReMem: Re-index Workspace Files"
+      },
+      {
+        "command": "remem.showDirectoryTree",
+        "title": "ReMem: Show Workspace Structure Tree"
+      },
+      {
+        "command": "remem.addPostMortem",
+        "title": "ReMem: Log Post-Mortem / Error Note"
+      },
+      {
+        "command": "remem.showErrorContext",
+        "title": "ReMem: Show Active Error Ledger Context"
+      },
+      {
+        "command": "remem.lockVault",
+        "title": "ReMem: Lock Secure Secrets Vault"
+      },
+      {
+        "command": "remem.encryptActiveFile",
+        "title": "ReMem: Encrypt Active File to Vault"
+      },
+      {
+        "command": "remem.viewVaultSecrets",
+        "title": "ReMem: View/Decrypt Vault Secrets"
+      },
+      {
+        "command": "remem.getContext",
+        "title": "ReMem: Generate Token-Optimized AI Context"
+      },
+      {
+        "command": "remem.purgeMemory",
+        "title": "ReMem: Purge and Rebuild Local Memory"
+      }
+    ],
+    "configuration": {
+      "type": "object",
+      "title": "ReMem Context Engine",
+      "properties": {
+        "remem.enableAutoSummarize": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically summarize files on save."
+        },
+        "remem.vaultSessionTimeoutMinutes": {
+          "type": "number",
+          "default": 60,
+          "description": "Duration in minutes to cache vault master password in memory."
+        },
+        "remem.lruContextTurnLimit": {
+          "type": "number",
+          "default": 3,
+          "description": "Number of conversation turns before untouched files are pruned from active context."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "build": "tsc -p ./",
+    "package": "npx @vscode/vsce package --no-dependencies"
+  },
+  "dependencies": {
+    "@orama/orama": "^2.0.23",
+    "simple-git": "^3.27.0",
+    "sql.js": "^1.12.0",
+    "web-tree-sitter": "^0.24.4"
+  },
+  "devDependencies": {
+    "@types/node": "^20.17.0",
+    "@types/sql.js": "^1.4.9",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.6.3"
+  }
+}

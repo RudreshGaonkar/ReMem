@@ -1,0 +1,11 @@
+node_modules/
+out/
+dist/
+.antigravityMem/
+.recall_scratchpad.md
+*.vsix
+.vscode-test/
+.DS_Store
+*.log
+antigravity_extension_master_prompt.md
+Explanation.md
