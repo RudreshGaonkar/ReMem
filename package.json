@@ -20,7 +20,20 @@
   ],
   "main": "./out/extension.js",
   "activationEvents": [
-    "onStartupFinished"
+    "onStartupFinished",
+    "onCommand:remem.status",
+    "onCommand:remem.showScratchpad",
+    "onCommand:remem.searchSummaries",
+    "onCommand:remem.reindexWorkspace",
+    "onCommand:remem.showDirectoryTree",
+    "onCommand:remem.addPostMortem",
+    "onCommand:remem.showErrorContext",
+    "onCommand:remem.lockVault",
+    "onCommand:remem.encryptActiveFile",
+    "onCommand:remem.viewVaultSecrets",
+    "onCommand:remem.getContext",
+    "onCommand:remem.purgeMemory",
+    "onCommand:remem.toggleSync"
   ],
   "contributes": {
     "commands": [
@@ -100,11 +113,13 @@
     }
   },
   "scripts": {
-    "vscode:prepublish": "npm run compile",
-    "compile": "tsc -p ./",
-    "watch": "tsc -watch -p ./",
-    "build": "tsc -p ./",
-    "package": "npx @vscode/vsce package"
+    "vscode:prepublish": "node esbuild.js --production",
+    "compile": "node esbuild.js",
+    "watch": "node esbuild.js --watch",
+    "typecheck": "tsc -p ./ --noEmit",
+    "build": "node esbuild.js --production",
+    "package": "npx @vscode/vsce package",
+    "install:ide": "npx @vscode/vsce package && \"/home/rudresh/apps/Antigravity IDE/bin/antigravity-ide\" --install-extension remem-context-engine-0.1.1.vsix --force"
   },
   "dependencies": {
     "@orama/orama": "^2.0.23",
@@ -116,6 +131,7 @@
     "@types/node": "^20.17.0",
     "@types/sql.js": "^1.4.9",
     "@types/vscode": "^1.85.0",
+    "esbuild": "^0.28.2",
     "typescript": "^5.6.3"
   }
 }

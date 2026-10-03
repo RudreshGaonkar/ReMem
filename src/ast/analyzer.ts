@@ -18,7 +18,10 @@ export class ASTAnalyzer {
    */
   public async initialize(): Promise<void> {
     try {
-      await Parser.init();
+      // `moduleURL` tells web-tree-sitter where to find tree-sitter.wasm at runtime.
+      // esbuild copies the file to out/tree-sitter.wasm alongside out/extension.js.
+      const wasmPath = path.join(__dirname, 'tree-sitter.wasm');
+      await Parser.init({ moduleURL: wasmPath });
       this.isParserReady = true;
     } catch (err) {
       console.warn('[ReMem AST] web-tree-sitter initialization fallback to regex parser:', err);

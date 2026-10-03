@@ -50,6 +50,42 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   outputChannel.appendLine(`[ReMem] Activating ReMem AI Memory & Token Optimization Engine...`);
 
+  // ── Register all commands unconditionally ─────────────────────────────────
+  // Commands MUST be registered before any early-return guard, otherwise VS Code
+  // reports "command 'remem.X' not found" whenever activation exits early
+  // (e.g. no workspace folder open, or a dependency fails to initialise).
+  context.subscriptions.push(
+    vscode.commands.registerCommand('remem.status', () => {
+      const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+      if (!root) { vscode.window.showWarningMessage('ReMem: No workspace folder is open.'); return; }
+      return showEngineStatus(root);
+    }),
+    vscode.commands.registerCommand('remem.showScratchpad', () => openOrCreateScratchpad()),
+    vscode.commands.registerCommand('remem.purgeMemory', () => {
+      const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+      if (!root) { vscode.window.showWarningMessage('ReMem: No workspace folder is open.'); return; }
+      return purgeMemory(root, context);
+    }),
+    vscode.commands.registerCommand('remem.searchSummaries', () => handleSearchCommand()),
+    vscode.commands.registerCommand('remem.reindexWorkspace', () => {
+      const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+      if (!root) { vscode.window.showWarningMessage('ReMem: No workspace folder is open.'); return; }
+      return handleReindexCommand(root);
+    }),
+    vscode.commands.registerCommand('remem.showDirectoryTree', () => {
+      const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+      if (!root) { vscode.window.showWarningMessage('ReMem: No workspace folder is open.'); return; }
+      return handleShowTreeCommand(root);
+    }),
+    vscode.commands.registerCommand('remem.addPostMortem', () => handleAddPostMortemCommand()),
+    vscode.commands.registerCommand('remem.showErrorContext', () => handleShowErrorContextCommand()),
+    vscode.commands.registerCommand('remem.lockVault', () => handleLockVaultCommand()),
+    vscode.commands.registerCommand('remem.encryptActiveFile', () => handleEncryptActiveFileCommand()),
+    vscode.commands.registerCommand('remem.viewVaultSecrets', () => handleViewVaultSecretsCommand()),
+    vscode.commands.registerCommand('remem.getContext', () => handleGetContextCommand()),
+    vscode.commands.registerCommand('remem.toggleSync', () => handleToggleSyncCommand())
+  );
+
   const workspaceFolders = vscode.workspace.workspaceFolders;
   if (!workspaceFolders || workspaceFolders.length === 0) {
     outputChannel.appendLine(`[ReMem] No active workspace folder detected. Extension running in standby mode.`);
@@ -128,24 +164,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     outputChannel.appendLine(`[ReMem Database Error] Failed to initialize database: ${err}`);
     vscode.window.showErrorMessage(`ReMem Database initialization failed: ${err}`);
   }
-
-  // ── Register commands ──────────────────────────────────────────────────────
-  context.subscriptions.push(
-    vscode.commands.registerCommand('remem.status',            () => showEngineStatus(workspaceRoot)),
-    vscode.commands.registerCommand('remem.showScratchpad',    () => openOrCreateScratchpad()),
-    vscode.commands.registerCommand('remem.purgeMemory',       () => purgeMemory(workspaceRoot, context)),
-    vscode.commands.registerCommand('remem.searchSummaries',   () => handleSearchCommand()),
-    vscode.commands.registerCommand('remem.reindexWorkspace',  () => handleReindexCommand(workspaceRoot)),
-    vscode.commands.registerCommand('remem.showDirectoryTree', () => handleShowTreeCommand(workspaceRoot)),
-    vscode.commands.registerCommand('remem.addPostMortem',     () => handleAddPostMortemCommand()),
-    vscode.commands.registerCommand('remem.showErrorContext',  () => handleShowErrorContextCommand()),
-    vscode.commands.registerCommand('remem.lockVault',         () => handleLockVaultCommand()),
-    vscode.commands.registerCommand('remem.encryptActiveFile', () => handleEncryptActiveFileCommand()),
-    vscode.commands.registerCommand('remem.viewVaultSecrets',  () => handleViewVaultSecretsCommand()),
-    vscode.commands.registerCommand('remem.getContext',        () => handleGetContextCommand()),
-    // ── NEW: StatusBar toggle / manual sync ──────────────────────────────
-    vscode.commands.registerCommand('remem.toggleSync',        () => handleToggleSyncCommand())
-  );
 
   outputChannel.appendLine(`[ReMem] ReMem Context Engine activated successfully.`);
 }
@@ -232,7 +250,7 @@ async function performSessionRecovery(
   if (sqliteCount > 0 && vectorCount === 0) {
     outputChannel?.appendLine(
       `[ReMem Recovery] Orama index is empty but SQLite has ${sqliteCount} summaries. ` +
-        `Re-hydrating vector index from disk…`
+      `Re-hydrating vector index from disk…`
     );
     const rehydrated = await dbManager.rehydrateVectorIndexFromSqlite();
     outputChannel?.appendLine(
@@ -241,7 +259,7 @@ async function performSessionRecovery(
   } else {
     outputChannel?.appendLine(
       `[ReMem Recovery] Session state: ${sqliteCount} summaries, ${vectorCount} vectors indexed. ` +
-        `DB: ${fs.existsSync(dbPath) ? '✅ found' : '🆕 new'}.`
+      `DB: ${fs.existsSync(dbPath) ? '✅ found' : '🆕 new'}.`
     );
   }
 }

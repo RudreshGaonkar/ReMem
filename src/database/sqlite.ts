@@ -20,7 +20,11 @@ export class SqliteLedger {
    */
   public async initialize(): Promise<void> {
     const init = (initSqlJs as unknown as { default?: typeof initSqlJs }).default || initSqlJs;
-    this.SQL = await init();
+    // `locateFile` tells sql.js where to find sql-wasm.wasm at runtime.
+    // esbuild copies the file to out/sql-wasm.wasm alongside out/extension.js.
+    this.SQL = await init({
+      locateFile: (file: string) => path.join(__dirname, file),
+    });
 
     if (fs.existsSync(this.dbFilePath)) {
       const fileBuffer = fs.readFileSync(this.dbFilePath);

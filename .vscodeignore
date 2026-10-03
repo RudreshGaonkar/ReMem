@@ -2,10 +2,11 @@
 .vscode-test/**
 src/**
 tsconfig.json
+esbuild.js
 .gitignore
 .antigravityMem/**
 .recall_scratchpad.md
 *.md
 !README.md
 node_modules/**
-*.map
+out/**/*.map
