@@ -141,22 +141,31 @@ By mapping the codebase incrementally, generating 1–2 sentence structural summ
 
 ### 1. Clone & Install Dependencies
 ```bash
-git clone https://github.com/yourusername/antigravity-context-engine.git
-cd antigravity-context-engine
+git clone https://github.com/RudreshGaonkar/ReMem.git
+cd ReMem
 npm install
 ```
 
-### 2. Build the Extension
+### 2. Build & Package the Extension
 ```bash
-# Compile TypeScript to JavaScript
+# Typecheck TypeScript sources
+npm run typecheck
+
+# Bundle extension into out/extension.js and copy WASM assets via esbuild
 npm run compile
 
-# Or run continuously in watch mode
+# Run incremental bundler in watch mode
 npm run watch
+
+# Package as a .vsix extension file
+npm run package
+
+# (Antigravity IDE only) Package and force-install directly into Antigravity IDE
+npm run install:ide
 ```
 
 ### 3. Run Locally in VS Code / Antigravity
-1. Open the project folder in VS Code.
+1. Open the project folder in VS Code or Antigravity IDE.
 2. Press `F5` (or click **Run > Start Debugging**) to open an **Extension Development Host** window.
 3. Open any workspace in the new window. ReMem automatically creates `.antigravityMem/` in the project root.
 
@@ -169,17 +178,18 @@ Open the Command Palette (`Ctrl+Shift+P` on Linux/Windows, `Cmd+Shift+P` on macO
 | Command | Identifier | Description |
 |---|---|---|
 | **ReMem: Check Context Engine Status** | `remem.status` | Inspects workspace status, indexed summary counts, error notes, and vault lock state. |
+| **ReMem: Toggle Engine / Manual Sync** | `remem.toggleSync` | Pauses/resumes file-save auto-summarization or triggers a manual sync sweep for remote Git changes. |
 | **ReMem: Generate Token-Optimized AI Context** | `remem.getContext` | Assembles file summary, blast radius, error ledger, and scratchpad into a compact ~250-token payload and copies to clipboard. |
 | **ReMem: Open Active Scratchpad** | `remem.showScratchpad` | Opens `.recall_scratchpad.md` in the editor to track multi-step execution plans. |
 | **ReMem: Search Context Summaries** | `remem.searchSummaries` | Fast embedded search across all indexed project summaries using `@orama/orama`. |
 | **ReMem: Show Workspace Structure Tree** | `remem.showDirectoryTree` | Generates and displays a clean visual tree of your workspace hierarchy. |
 | **ReMem: Log Post-Mortem / Error Note** | `remem.addPostMortem` | Manually records a post-mortem note or rollback warning for the active context. |
 | **ReMem: Show Active Error Ledger Context** | `remem.showErrorContext` | Displays past rollback warnings and notes tied to the currently open file or branch. |
-| **ReMem: Encrypt Active File to Vault** | `remem.encryptActiveFile` | Encrypts the active sensitive file with AES-256-GCM and stores it in `.antigravityMem/vault.json`. |
+| **ReMem: Encrypt Active File to Vault** | `remem.encryptActiveFile` | Encrypts the active sensitive file with AES-256-GCM and stores it in `.antigravityMem/vault.enc`. |
 | **ReMem: View/Decrypt Vault Secrets** | `remem.viewVaultSecrets` | Prompts for master password and decrypts a chosen secret in an isolated viewer. |
 | **ReMem: Lock Secure Secrets Vault** | `remem.lockVault` | Immediately wipes cached master password credentials from memory. |
 | **ReMem: Re-index Workspace Files** | `remem.reindexWorkspace` | Manually triggers a background rescan and indexation of workspace files. |
-| **ReMem: Purge and Rebuild Local Memory** | `remem.purgeMemory` | Completely clears local memory caches and resets databases. |
+| **ReMem: Purge and Rebuild Local Memory** | `remem.purgeMemory` | Completely clears local memory caches and resets databases (modal confirmation required). |
 
 ---
 
@@ -202,8 +212,16 @@ Configure ReMem to match your development workflow in VS Code `settings.json`:
 
 ---
 
-## 🔒 Security & Privacy Architecture
+## 🔒 Security, Privacy & Safety Architecture
 
+### 🛡️ Non-Destructive Workspace & Git Safety Guarantees
+- **100% Read-Only on User Source Code:** All AST parsers, file watchers, and token summarizers only read source code. ReMem **never writes, reformats, overwrites, or deletes your project files**.
+- **Isolated Storage Boundary:** All internal states, caches, and databases are strictly contained within `.antigravityMem/` (plus `.recall_scratchpad.md` for AI execution plans).
+- **Read-Only Git Tracking:** The Git integration inspects commit hashes and diff summaries via read-only queries (`git status`, `git log`, `git diffSummary`). It **never executes automated commits, pushes, checkouts, or resets**.
+- **Self-Healing SQLite Recovery:** If the SQLite ledger file is ever damaged (e.g. following an abrupt OS power outage), the engine automatically backs up the file and re-initializes a clean schema without crashing the editor host.
+- **Fail-Safe AST Parsing:** If the Web-Tree-Sitter WASM engine encounters an unhandled language grammar, it automatically falls back to regex-based parsing without raising unhandled rejections.
+
+### 🔐 Cryptographic Security
 - **100% Local Processing:** Zero telemetry, zero external cloud database queries. All embeddings and databases live inside `.antigravityMem/` on your machine.
 - **AES-256-GCM Authenticated Encryption:** 128-bit authentication tag guarantees that tampered secret files cannot be decrypted.
 - **Zero Secrets in Vector Search:** Files marked `isEncrypted: true` are strictly barred from plaintext vector indexing.
@@ -227,9 +245,10 @@ Full-codebase RAG embeddings can still generate thousands of tokens of noisy sou
 ## 📁 Repository Structure
 
 ```
-antigravity-context-engine/
-├── package.json               # Extension manifest & scripts
+ReMem/
+├── package.json               # Extension manifest & npm scripts
 ├── tsconfig.json              # TypeScript compilation config
+├── esbuild.js                 # Production bundler & WASM asset manager
 ├── README.md                  # SEO-optimized project overview & guide
 ├── Explanation.md             # In-depth architectural & interview handbook
 ├── LICENSE                    # MIT License
@@ -238,7 +257,7 @@ antigravity-context-engine/
     ├── extension.ts           # Extension entry point (activate/deactivate)
     ├── types/                 # Shared TypeScript domain interfaces
     ├── database/              # SQLite WASM & Orama Vector storage
-    │   ├── sqlite.ts          # sql.js in-memory SQLite with disk export
+    │   ├── sqlite.ts          # sql.js in-memory SQLite with corruption recovery
     │   ├── vector.ts          # @orama/orama embedded search
     │   └── index.ts           # Unified DatabaseManager coordinating dual writes
     ├── summarizer/            # File watcher & structural summarizer
@@ -247,12 +266,12 @@ antigravity-context-engine/
     │   ├── watcher.ts         # onDidSaveTextDocument file listeners
     │   └── indexer.ts         # Background workspace indexer & directory tree
     ├── git/                   # Git rollback watcher & Error Ledger
-    │   ├── watcher.ts         # .git/HEAD kernel-level file watcher
+    │   ├── watcher.ts         # .git/HEAD kernel-level file watcher (read-only)
     │   ├── prompt.ts          # Interactive post-mortem note dialogs
     │   └── ledger.ts          # Error ledger query & prompt formatter
     ├── vault/                 # AES-256-GCM Secrets Vault
     │   ├── crypto.ts          # AES-256-GCM + 100k PBKDF2 encryption/decryption
-    │   ├── storage.ts         # .antigravityMem/vault.json manager
+    │   ├── storage.ts         # .antigravityMem/vault.enc manager
     │   ├── session.ts         # 1-hour in-memory cache with auto-expiration
     │   └── ui.ts              # Password prompt & vault decryption workflow
     └── ast/                   # AST Blast Radius, Scratchpad, & Context Injector
