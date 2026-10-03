@@ -27,8 +27,21 @@ export class SqliteLedger {
     });
 
     if (fs.existsSync(this.dbFilePath)) {
-      const fileBuffer = fs.readFileSync(this.dbFilePath);
-      this.db = new this.SQL.Database(fileBuffer);
+      try {
+        const fileBuffer = fs.readFileSync(this.dbFilePath);
+        this.db = new this.SQL.Database(fileBuffer);
+      } catch (err) {
+        // Corrupted DB file recovery: back up corrupted file and initialize fresh DB
+        console.error('[ReMem Database] Corrupted SQLite file detected, recreating:', err);
+        try {
+          fs.renameSync(this.dbFilePath, `${this.dbFilePath}.corrupted.${Date.now()}`);
+        } catch {
+          // If rename fails, ignore and overwrite
+        }
+        this.db = new this.SQL.Database();
+        this.createSchema();
+        this.exportDatabaseToDisk();
+      }
     } else {
       const dir = path.dirname(this.dbFilePath);
       if (!fs.existsSync(dir)) {
