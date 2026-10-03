@@ -74,6 +74,43 @@ export class SqliteLedger {
   }
 
   /**
+   * Public alias: ensures all required tables exist and adds any missing columns
+   * introduced in later schema versions.  Safe to call on every startup.
+   */
+  public verifyAndRepairSchema(): void {
+    // Re-run CREATE TABLE IF NOT EXISTS for all tables
+    this.createSchema();
+
+    // Guard: add `isEncrypted` column if loading a very old DB that predates it
+    if (this.db) {
+      try {
+        this.db.run(`ALTER TABLE file_summaries ADD COLUMN isEncrypted INTEGER NOT NULL DEFAULT 0`);
+      } catch {
+        // Column already exists – ignore the error
+      }
+    }
+  }
+
+  /**
+   * Returns `true` when both required tables are present in the loaded database.
+   */
+  public isSchemaIntact(): boolean {
+    if (!this.db) {
+      return false;
+    }
+    try {
+      const res = this.db.exec(`
+        SELECT COUNT(*) as c FROM sqlite_master
+        WHERE type='table' AND name IN ('file_summaries', 'error_ledger')
+      `);
+      const count = Number(res?.[0]?.values?.[0]?.[0] ?? 0);
+      return count === 2;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
    * Saves or updates a file summary in SQLite.
    */
   public saveFileSummary(summary: FileSummary): void {

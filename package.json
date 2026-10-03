@@ -2,7 +2,7 @@
   "name": "remem-context-engine",
   "displayName": "ReMem: AI Memory & Token Optimization Engine",
   "description": "Local RAG middleman, state manager, and token optimization engine for AI coding agents.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "icon": "icon.png",
   "publisher": "RudreshGaonkar",
   "license": "MIT",
@@ -71,6 +71,10 @@
       {
         "command": "remem.purgeMemory",
         "title": "ReMem: Purge and Rebuild Local Memory"
+      },
+      {
+        "command": "remem.toggleSync",
+        "title": "ReMem: Toggle Engine / Manual Sync"
       }
     ],
     "configuration": {

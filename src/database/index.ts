@@ -18,6 +18,13 @@ export class DatabaseManager {
 
   /**
    * Initializes both the SQLite and Vector database instances inside .antigravityMem/.
+   *
+   * Session recovery behaviour:
+   *  • If `remem_ledger.sqlite` already exists on disk it is loaded as-is so all
+   *    previously indexed summaries survive an IDE restart.
+   *  • If `orama_index.json` already exists on disk the Orama vector index is
+   *    re-hydrated from the persisted snapshot (handled inside VectorSearchEngine.initialize).
+   *  • Schema integrity is verified via verifySchemaIntegrity() after load.
    */
   public async initialize(workspaceRoot: string): Promise<void> {
     this.workspaceRoot = workspaceRoot;
@@ -25,16 +32,68 @@ export class DatabaseManager {
     const dbPath = getDbFilePath(workspaceRoot);
     const vectorIndexPath = path.join(memDir, CONFIG.VECTOR_INDEX_FILE_NAME);
 
-    // Initialize SQLite
+    // Initialize SQLite (re-opens existing DB if file is present on disk)
     this.sqliteLedger = new SqliteLedger(dbPath);
     await this.sqliteLedger.initialize();
 
-    // Initialize Vector / Orama engine
+    // Verify the on-disk schema is complete and up-to-date
+    this.sqliteLedger.verifyAndRepairSchema();
+
+    // Initialize Vector / Orama engine (restores from disk snapshot if present)
     this.vectorEngine = new VectorSearchEngine(vectorIndexPath);
     await this.vectorEngine.initialize();
 
     this.isInitialized = true;
   }
+
+  // ─── Session recovery ──────────────────────────────────────────────────────
+
+  /**
+   * Re-hydrates the Orama vector index from the persisted SQLite summaries.
+   *
+   * Useful when the Orama JSON snapshot is corrupted or missing but SQLite is
+   * intact.  Iterates all stored file summaries and re-inserts them into a
+   * freshly created Orama instance.
+   */
+  public async rehydrateVectorIndexFromSqlite(): Promise<number> {
+    if (!this.sqliteLedger || !this.vectorEngine) {
+      return 0;
+    }
+
+    const summaries = this.sqliteLedger.getAllFileSummaries();
+    let rehydrated = 0;
+
+    for (const summary of summaries) {
+      if (!summary.isEncrypted) {
+        await this.vectorEngine.indexSummary({
+          filePath: summary.filePath,
+          relativePath: summary.relativePath,
+          summary: summary.summary,
+        });
+        rehydrated++;
+      }
+    }
+
+    if (rehydrated > 0) {
+      await this.vectorEngine.saveToDisk();
+    }
+
+    return rehydrated;
+  }
+
+  /**
+   * Checks the SQLite schema for expected tables.  If any required table is
+   * missing, SqliteLedger.verifyAndRepairSchema() will have already re-created
+   * it.  Returns `true` when schema is fully intact.
+   */
+  public verifySchemaIntegrity(): boolean {
+    if (!this.sqliteLedger) {
+      return false;
+    }
+    return this.sqliteLedger.isSchemaIntact();
+  }
+
+  // ─── Accessors ─────────────────────────────────────────────────────────────
 
   public get isReady(): boolean {
     return this.isInitialized;
@@ -57,6 +116,8 @@ export class DatabaseManager {
     }
     return this.vectorEngine;
   }
+
+  // ─── File summaries ────────────────────────────────────────────────────────
 
   /**
    * Stores a file summary in SQLite and updates the vector search index simultaneously.
@@ -98,6 +159,8 @@ export class DatabaseManager {
     return this.vector.searchSummaries(term, limit);
   }
 
+  // ─── Error ledger ──────────────────────────────────────────────────────────
+
   /**
    * Adds an error / post-mortem note to the branch ledger.
    */
@@ -118,6 +181,8 @@ export class DatabaseManager {
   public getErrorNotesForBranch(branch: string): ErrorLedgerEntry[] {
     return this.sqlite.getErrorNotesForBranch(branch);
   }
+
+  // ─── Stats & persistence ───────────────────────────────────────────────────
 
   /**
    * Returns current statistics across both databases.

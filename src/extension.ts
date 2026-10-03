@@ -16,6 +16,8 @@ import { ScratchpadManager } from './ast/scratchpad.js';
 import { assembleContext } from './ast/injector.js';
 import { EngineStatus } from './types/index.js';
 
+// ─── Module-level singletons ──────────────────────────────────────────────────
+
 let outputChannel: vscode.OutputChannel | undefined;
 let dbManager: DatabaseManager | null = null;
 let pipeline: SummarizerPipeline | null = null;
@@ -25,8 +27,22 @@ let vaultSession: VaultSessionManager | null = null;
 let astAnalyzer: ASTAnalyzer | null = null;
 let scratchpad: ScratchpadManager | null = null;
 
+/** StatusBar item showing ReMem state with a toggle/sync click handler. */
+let statusBarItem: vscode.StatusBarItem | undefined;
+
+/** When `false` the engine is paused: file-save summarization is disabled. */
+let isEngineActive: boolean = true;
+
+/** globalState key used to persist the scratchpad content across IDE restarts. */
+const SCRATCHPAD_STATE_KEY = 'remem.scratchpadContent';
+
+// ─── Activation ──────────────────────────────────────────────────────────────
+
 /**
  * Extension activation lifecycle entry point.
+ *
+ * `onStartupFinished` is listed in `activationEvents` so VS Code boots ReMem
+ * automatically on every workspace open — no manual command required.
  */
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   outputChannel = vscode.window.createOutputChannel(CONFIG.OUTPUT_CHANNEL_NAME);
@@ -43,6 +59,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const workspaceRoot = workspaceFolders[0].uri.fsPath;
   outputChannel.appendLine(`[ReMem] Workspace Root: ${workspaceRoot}`);
 
+  // ── StatusBar item (created early so it is visible even if init takes time) ─
+  statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
+  statusBarItem.command = 'remem.toggleSync';
+  updateStatusBar(); // set initial label
+  statusBarItem.show();
+  context.subscriptions.push(statusBarItem);
+
   // Initialize the local .antigravityMem directory
   ensureMemoryDirectory(workspaceRoot);
 
@@ -51,57 +74,83 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     dbManager = new DatabaseManager();
     await dbManager.initialize(workspaceRoot);
     pipeline = new SummarizerPipeline(dbManager);
-    outputChannel.appendLine(`[ReMem Database] SQLite ledger and Orama vector search initialized successfully.`);
 
-    // Initialize Secure Secrets Vault
+    outputChannel.appendLine(`[ReMem Database] SQLite ledger and Orama vector search initialized.`);
+
+    // ── Session recovery ────────────────────────────────────────────────────
+    await performSessionRecovery(context, workspaceRoot);
+
+    // ── Secure Secrets Vault ────────────────────────────────────────────────
     vaultStorage = new VaultStorage(workspaceRoot);
     vaultSession = new VaultSessionManager(CONFIG.VAULT_CACHE_TIMEOUT_MS);
     outputChannel.appendLine(`[ReMem Vault] Secure Secrets Vault initialized.`);
 
-    // Initialize Scratchpad Manager (.recall_scratchpad.md)
+    // ── Scratchpad Manager (.recall_scratchpad.md) ──────────────────────────
     scratchpad = new ScratchpadManager(workspaceRoot);
+    const persistedContent = context.globalState.get<string>(SCRATCHPAD_STATE_KEY);
+    const wasRestored = scratchpad.restoreState(persistedContent);
+    outputChannel.appendLine(
+      wasRestored
+        ? `[ReMem Scratchpad] Scratchpad state restored from previous session.`
+        : `[ReMem Scratchpad] Scratchpad initialized with default template.`
+    );
 
-    // Initialize AST Dependency Analyzer
+    // ── AST Dependency Analyzer ─────────────────────────────────────────────
     astAnalyzer = new ASTAnalyzer();
     await astAnalyzer.initialize();
     astAnalyzer.buildDependencyGraph(workspaceRoot).catch((err) => {
       outputChannel?.appendLine(`[ReMem AST Error] Dependency scan error: ${err}`);
     });
 
-    // Setup active file watchers for onDidSaveTextDocument
+    // ── File watcher (on-save summarization) ───────────────────────────────
     setupFileWatcher(context, dbManager, pipeline, outputChannel);
 
-    // Setup Git State Watcher (.git/HEAD file watcher)
+    // ── Git State Watcher ──────────────────────────────────────────────────
     gitWatcher = new GitStateWatcher(workspaceRoot, dbManager, outputChannel);
+    gitWatcher.setPipeline(pipeline); // wire in pipeline for remote-sync auto-summarization
     await gitWatcher.initialize(context);
 
-    // Trigger initial background workspace indexation
+    // ── Initial background workspace indexation ────────────────────────────
     indexWorkspace(workspaceRoot, dbManager, pipeline, outputChannel).catch((err) => {
       outputChannel?.appendLine(`[ReMem Indexer Error] Background indexing failed: ${err}`);
     });
+
+    // ── Periodically persist scratchpad to globalState ─────────────────────
+    const scratchpadPersistTimer = setInterval(() => {
+      if (scratchpad) {
+        const content = scratchpad.getPlan();
+        context.globalState.update(SCRATCHPAD_STATE_KEY, content);
+      }
+    }, 60_000); // every 60 seconds
+    context.subscriptions.push({ dispose: () => clearInterval(scratchpadPersistTimer) });
+
   } catch (err) {
     outputChannel.appendLine(`[ReMem Database Error] Failed to initialize database: ${err}`);
     vscode.window.showErrorMessage(`ReMem Database initialization failed: ${err}`);
   }
 
-  // Register commands
+  // ── Register commands ──────────────────────────────────────────────────────
   context.subscriptions.push(
-    vscode.commands.registerCommand('remem.status', () => showEngineStatus(workspaceRoot)),
-    vscode.commands.registerCommand('remem.showScratchpad', () => openOrCreateScratchpad()),
-    vscode.commands.registerCommand('remem.purgeMemory', () => purgeMemory(workspaceRoot)),
-    vscode.commands.registerCommand('remem.searchSummaries', () => handleSearchCommand()),
-    vscode.commands.registerCommand('remem.reindexWorkspace', () => handleReindexCommand(workspaceRoot)),
+    vscode.commands.registerCommand('remem.status',            () => showEngineStatus(workspaceRoot)),
+    vscode.commands.registerCommand('remem.showScratchpad',    () => openOrCreateScratchpad()),
+    vscode.commands.registerCommand('remem.purgeMemory',       () => purgeMemory(workspaceRoot, context)),
+    vscode.commands.registerCommand('remem.searchSummaries',   () => handleSearchCommand()),
+    vscode.commands.registerCommand('remem.reindexWorkspace',  () => handleReindexCommand(workspaceRoot)),
     vscode.commands.registerCommand('remem.showDirectoryTree', () => handleShowTreeCommand(workspaceRoot)),
-    vscode.commands.registerCommand('remem.addPostMortem', () => handleAddPostMortemCommand()),
-    vscode.commands.registerCommand('remem.showErrorContext', () => handleShowErrorContextCommand()),
-    vscode.commands.registerCommand('remem.lockVault', () => handleLockVaultCommand()),
+    vscode.commands.registerCommand('remem.addPostMortem',     () => handleAddPostMortemCommand()),
+    vscode.commands.registerCommand('remem.showErrorContext',  () => handleShowErrorContextCommand()),
+    vscode.commands.registerCommand('remem.lockVault',         () => handleLockVaultCommand()),
     vscode.commands.registerCommand('remem.encryptActiveFile', () => handleEncryptActiveFileCommand()),
-    vscode.commands.registerCommand('remem.viewVaultSecrets', () => handleViewVaultSecretsCommand()),
-    vscode.commands.registerCommand('remem.getContext', () => handleGetContextCommand())
+    vscode.commands.registerCommand('remem.viewVaultSecrets',  () => handleViewVaultSecretsCommand()),
+    vscode.commands.registerCommand('remem.getContext',        () => handleGetContextCommand()),
+    // ── NEW: StatusBar toggle / manual sync ──────────────────────────────
+    vscode.commands.registerCommand('remem.toggleSync',        () => handleToggleSyncCommand())
   );
 
   outputChannel.appendLine(`[ReMem] ReMem Context Engine activated successfully.`);
 }
+
+// ─── Deactivation ─────────────────────────────────────────────────────────────
 
 /**
  * Extension deactivation lifecycle.
@@ -129,11 +178,18 @@ export async function deactivate(): Promise<void> {
   astAnalyzer = null;
   scratchpad = null;
 
+  if (statusBarItem) {
+    statusBarItem.dispose();
+    statusBarItem = undefined;
+  }
+
   if (outputChannel) {
     outputChannel.appendLine(`[ReMem] Deactivating ReMem Context Engine.`);
     outputChannel.dispose();
   }
 }
+
+// ─── Exports ──────────────────────────────────────────────────────────────────
 
 /**
  * Returns the active DatabaseManager instance.
@@ -141,6 +197,139 @@ export async function deactivate(): Promise<void> {
 export function getDatabaseManager(): DatabaseManager | null {
   return dbManager;
 }
+
+// ─── Session recovery ──────────────────────────────────────────────────────────
+
+/**
+ * Runs on every startup to restore state from the persisted `.antigravityMem/` directory:
+ *
+ * 1. Verifies SQLite schema integrity; repairs missing tables if required.
+ * 2. Checks whether the Orama vector index is populated; if not (e.g. after an
+ *    OS crash that left the JSON file missing), re-hydrates it from SQLite rows.
+ * 3. Logs recovery diagnostics to the output channel.
+ */
+async function performSessionRecovery(
+  _context: vscode.ExtensionContext,
+  workspaceRoot: string
+): Promise<void> {
+  if (!dbManager) return;
+
+  const memDir = getMemoryDirPath(workspaceRoot);
+  const dbPath = `${memDir}/${CONFIG.DB_FILE_NAME}`;
+
+  // ── 1. Schema integrity ──────────────────────────────────────────────────
+  const schemaOk = dbManager.verifySchemaIntegrity();
+  outputChannel?.appendLine(
+    schemaOk
+      ? `[ReMem Recovery] Schema integrity: ✅ intact.`
+      : `[ReMem Recovery] Schema integrity: ⚠️  repaired (missing tables were recreated).`
+  );
+
+  // ── 2. Vector index re-hydration ─────────────────────────────────────────
+  const vectorCount = await dbManager.getStats().then((s) => s.vectorIndexedCount);
+  const sqliteCount = await dbManager.getStats().then((s) => s.fileSummariesCount);
+
+  if (sqliteCount > 0 && vectorCount === 0) {
+    outputChannel?.appendLine(
+      `[ReMem Recovery] Orama index is empty but SQLite has ${sqliteCount} summaries. ` +
+        `Re-hydrating vector index from disk…`
+    );
+    const rehydrated = await dbManager.rehydrateVectorIndexFromSqlite();
+    outputChannel?.appendLine(
+      `[ReMem Recovery] Vector index re-hydrated with ${rehydrated} document(s).`
+    );
+  } else {
+    outputChannel?.appendLine(
+      `[ReMem Recovery] Session state: ${sqliteCount} summaries, ${vectorCount} vectors indexed. ` +
+        `DB: ${fs.existsSync(dbPath) ? '✅ found' : '🆕 new'}.`
+    );
+  }
+}
+
+// ─── StatusBar helpers ────────────────────────────────────────────────────────
+
+/**
+ * Updates the StatusBar label to reflect the current engine state.
+ */
+function updateStatusBar(): void {
+  if (!statusBarItem) return;
+
+  if (isEngineActive) {
+    statusBarItem.text = `$(brain) ReMem: Active`;
+    statusBarItem.tooltip = 'ReMem is active. Click to pause auto-summarization or trigger a manual sync.';
+    statusBarItem.backgroundColor = undefined;
+  } else {
+    statusBarItem.text = `$(debug-pause) ReMem: Paused`;
+    statusBarItem.tooltip = 'ReMem is paused. Click to resume.';
+    statusBarItem.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
+  }
+}
+
+/**
+ * Handles the StatusBar click:
+ *   • If engine is paused  → resumes it.
+ *   • If engine is active  → presents a Quick Pick: Pause | Manual Sync.
+ */
+async function handleToggleSyncCommand(): Promise<void> {
+  if (!isEngineActive) {
+    // Resume
+    isEngineActive = true;
+    updateStatusBar();
+    vscode.window.showInformationMessage('ReMem: Engine resumed. Auto-summarization is active.');
+    outputChannel?.appendLine('[ReMem] Engine resumed by user.');
+    return;
+  }
+
+  // Active → offer Pause or Manual Sync
+  const choice = await vscode.window.showQuickPick(
+    [
+      {
+        label: '$(sync) Manual Sync Now',
+        description: 'Re-check Git remote changes and auto-summarize any new files',
+        value: 'sync',
+      },
+      {
+        label: '$(debug-pause) Pause ReMem',
+        description: 'Temporarily disable auto-summarization (re-click to resume)',
+        value: 'pause',
+      },
+    ],
+    { placeHolder: 'ReMem is active — what would you like to do?' }
+  );
+
+  if (!choice) return;
+
+  if (choice.value === 'pause') {
+    isEngineActive = false;
+    updateStatusBar();
+    vscode.window.showInformationMessage('ReMem: Engine paused. Click the StatusBar item to resume.');
+    outputChannel?.appendLine('[ReMem] Engine paused by user.');
+  } else if (choice.value === 'sync') {
+    if (!gitWatcher) {
+      vscode.window.showWarningMessage('ReMem: Git watcher is not running (no .git repo detected).');
+      return;
+    }
+    vscode.window.withProgress(
+      {
+        location: vscode.ProgressLocation.Notification,
+        title: 'ReMem: Scanning for remote Git changes…',
+        cancellable: false,
+      },
+      async () => {
+        const result = await gitWatcher!.triggerManualSync();
+        if (result.summarizedCount > 0) {
+          vscode.window.showInformationMessage(
+            `ReMem Sync: ${result.summarizedCount} file(s) auto-summarized from teammate changes.`
+          );
+        } else {
+          vscode.window.showInformationMessage('ReMem Sync: No new remote changes detected.');
+        }
+      }
+    );
+  }
+}
+
+// ─── Utility ──────────────────────────────────────────────────────────────────
 
 /**
  * Ensures the hidden .antigravityMem folder exists in the project root.
@@ -155,6 +344,8 @@ function ensureMemoryDirectory(workspaceRoot: string): void {
   }
 }
 
+// ─── Command handlers ──────────────────────────────────────────────────────────
+
 /**
  * Displays current engine status via an Information notification and Output Channel.
  */
@@ -162,7 +353,9 @@ async function showEngineStatus(workspaceRoot: string): Promise<void> {
   const memDir = getMemoryDirPath(workspaceRoot);
   const isInitialized = fs.existsSync(memDir) && (dbManager?.isReady ?? false);
 
-  const stats = dbManager ? await dbManager.getStats() : { fileSummariesCount: 0, errorNotesCount: 0, vectorIndexedCount: 0 };
+  const stats = dbManager
+    ? await dbManager.getStats()
+    : { fileSummariesCount: 0, errorNotesCount: 0, vectorIndexedCount: 0 };
   const vaultCount = vaultStorage ? vaultStorage.count() : 0;
   const isVaultUnlocked = vaultSession ? vaultSession.isUnlocked() : false;
 
@@ -175,7 +368,12 @@ async function showEngineStatus(workspaceRoot: string): Promise<void> {
     isVaultUnlocked,
   };
 
-  const message = `ReMem Status: Initialized: ${status.isInitialized} | Summaries: ${stats.fileSummariesCount} | Error Notes: ${stats.errorNotesCount} | Vault Secrets: ${vaultCount} (Unlocked: ${isVaultUnlocked})`;
+  const message =
+    `ReMem Status: Initialized: ${status.isInitialized} | ` +
+    `Summaries: ${stats.fileSummariesCount} | Error Notes: ${stats.errorNotesCount} | ` +
+    `Vault Secrets: ${vaultCount} (Unlocked: ${isVaultUnlocked}) | ` +
+    `Engine: ${isEngineActive ? 'Active' : 'Paused'}`;
+
   vscode.window.showInformationMessage(message);
   outputChannel?.appendLine(`[ReMem Status Check]\n${JSON.stringify(status, null, 2)}`);
 }
@@ -421,7 +619,7 @@ async function openOrCreateScratchpad(): Promise<void> {
 /**
  * Purges the local .antigravityMem cache and rebuilds database structures.
  */
-async function purgeMemory(workspaceRoot: string): Promise<void> {
+async function purgeMemory(workspaceRoot: string, context: vscode.ExtensionContext): Promise<void> {
   const confirm = await vscode.window.showWarningMessage(
     'Are you sure you want to purge local AI context memory (.antigravityMem)?',
     { modal: true },
@@ -450,6 +648,9 @@ async function purgeMemory(workspaceRoot: string): Promise<void> {
     await dbManager.initialize(workspaceRoot);
     pipeline = new SummarizerPipeline(dbManager);
     vaultStorage = new VaultStorage(workspaceRoot);
+
+    // Also clear the persisted scratchpad content from globalState
+    await context.globalState.update(SCRATCHPAD_STATE_KEY, undefined);
 
     if (scratchpad) {
       scratchpad.clearPlan();
