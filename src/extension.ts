@@ -116,10 +116,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     // ── Session recovery ────────────────────────────────────────────────────
     await performSessionRecovery(context, workspaceRoot);
 
-    // ── Secure Secrets Vault ────────────────────────────────────────────────
+    // ── Secure Secrets Vault (Native SecretStorage / OS Keychain) ───────────
     vaultStorage = new VaultStorage(workspaceRoot);
-    vaultSession = new VaultSessionManager(CONFIG.VAULT_CACHE_TIMEOUT_MS);
-    outputChannel.appendLine(`[ReMem Vault] Secure Secrets Vault initialized.`);
+    vaultSession = new VaultSessionManager(context.secrets, workspaceRoot, outputChannel);
+    pipeline.setVault(vaultStorage, vaultSession);
+    outputChannel.appendLine(`[ReMem Vault] Secure Secrets Vault initialized (backed by native SecretStorage).`);
 
     // ── Scratchpad Manager (.recall_scratchpad.md) ──────────────────────────
     scratchpad = new ScratchpadManager(workspaceRoot);
@@ -432,8 +433,8 @@ async function handleGetContextCommand(): Promise<void> {
 function handleLockVaultCommand(): void {
   if (vaultSession) {
     vaultSession.lock();
-    vscode.window.showInformationMessage('ReMem: Vault session locked. Master key wiped from memory.');
-    outputChannel?.appendLine('[ReMem Vault] Vault session manually locked.');
+    vscode.window.showInformationMessage('ReMem: Vault in-memory session cleared. Native credentials remain safely secured in System Keychain.');
+    outputChannel?.appendLine('[ReMem Vault] Vault session cache manually cleared.');
   }
 }
 
@@ -453,7 +454,7 @@ async function handleEncryptActiveFileCommand(): Promise<void> {
 
   const success = await encryptAndStoreSecret(filePath, relativePath, content, vaultStorage, vaultSession);
   if (success) {
-    vscode.window.showInformationMessage(`ReMem: Encrypted "${relativePath}" and saved into Secure Vault.`);
+    vscode.window.showInformationMessage(`ReMem: Encrypted "${relativePath}" and saved into Secure Vault (Native Keychain).`);
     outputChannel?.appendLine(`[ReMem Vault] Encrypted and stored secret: ${relativePath}`);
   }
 }
@@ -666,6 +667,8 @@ async function purgeMemory(workspaceRoot: string, context: vscode.ExtensionConte
     await dbManager.initialize(workspaceRoot);
     pipeline = new SummarizerPipeline(dbManager);
     vaultStorage = new VaultStorage(workspaceRoot);
+    vaultSession = new VaultSessionManager(context.secrets, workspaceRoot, outputChannel);
+    pipeline.setVault(vaultStorage, vaultSession);
 
     // Also clear the persisted scratchpad content from globalState
     await context.globalState.update(SCRATCHPAD_STATE_KEY, undefined);

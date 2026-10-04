@@ -4,15 +4,28 @@ import { CONFIG } from '../config.js';
 import { DatabaseManager } from '../database/index.js';
 import { FileSummary } from '../types/index.js';
 import { computeFileHash, estimateTokenCount } from './hasher.js';
+import { encryptSecret } from '../vault/crypto.js';
+import type { VaultStorage } from '../vault/storage.js';
+import type { VaultSessionManager } from '../vault/session.js';
 
 /**
  * SummarizerPipeline processes source code and generates 1-2 sentence structural summaries.
  */
 export class SummarizerPipeline {
   private dbManager: DatabaseManager;
+  private vaultStorage?: VaultStorage;
+  private vaultSession?: VaultSessionManager;
 
   constructor(dbManager: DatabaseManager) {
     this.dbManager = dbManager;
+  }
+
+  /**
+   * Attaches the Secure Vault storage and native session manager for automated secret encryption.
+   */
+  public setVault(storage: VaultStorage, session: VaultSessionManager): void {
+    this.vaultStorage = storage;
+    this.vaultSession = session;
   }
 
   /**
@@ -49,7 +62,29 @@ export class SummarizerPipeline {
     let summaryText: string;
 
     if (isSensitive) {
-      summaryText = `[Encrypted Vault File] Sensitive configuration or secret keys (${path.basename(filePath)}). Protected by AES-256-GCM.`;
+      summaryText = `[Encrypted Vault File] Sensitive configuration or secret keys (${path.basename(filePath)}). Protected by AES-256-GCM (Native Keychain).`;
+
+      // Automate secret encryption and storage via native SecretStorage / OS Keychain
+      if (this.vaultStorage && this.vaultSession) {
+        try {
+          const masterKey = await this.vaultSession.getOrCreateMasterKey();
+          if (masterKey) {
+            const payload = encryptSecret(content, masterKey);
+            this.vaultStorage.storeSecret({
+              filePath,
+              relativePath,
+              iv: payload.iv,
+              authTag: payload.authTag,
+              encryptedData: payload.encryptedData,
+              keySalt: payload.keySalt,
+              updatedAt: Date.now(),
+            });
+          }
+        } catch (vaultErr) {
+          // Graceful fallback: non-blocking, indexing proceeds unaffected
+          console.warn('[ReMem Vault] Automated secret encryption fallback:', vaultErr);
+        }
+      }
     } else {
       summaryText = this.generateStructuralSummary(filePath, content);
     }

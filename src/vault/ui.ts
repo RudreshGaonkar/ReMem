@@ -5,36 +5,21 @@ import { VaultSessionManager } from './session.js';
 import { VaultStorage } from './storage.js';
 
 /**
- * Retrieves the master vault password from memory, or prompts the user via the IDE UI.
+ * Retrieves the workspace encryption key from native SecretStorage / OS Keychain.
  */
 export async function getOrPromptVaultPassword(
   sessionManager: VaultSessionManager
 ): Promise<string | null> {
-  if (sessionManager.isUnlocked()) {
-    return sessionManager.getPassword();
-  }
-
-  const password = await vscode.window.showInputBox({
-    password: true,
-    prompt: 'ReMem Secure Vault: Enter master encryption password (cached in memory for 1 hour)',
-    placeHolder: 'Enter master password...',
-    ignoreFocusOut: true,
-  });
-
-  if (!password || password.trim().length === 0) {
-    vscode.window.showWarningMessage('ReMem: Vault operation cancelled (password required).');
+  try {
+    return await sessionManager.getOrCreateMasterKey();
+  } catch (err) {
+    vscode.window.showWarningMessage(`ReMem: Unable to access native SecretStorage: ${err}`);
     return null;
   }
-
-  sessionManager.setPassword(password);
-  const remainingMinutes = Math.round(sessionManager.getRemainingTimeSeconds() / 60);
-  vscode.window.showInformationMessage(`ReMem: Vault unlocked. Credentials cached for ${remainingMinutes} minutes.`);
-
-  return password;
 }
 
 /**
- * Encrypts a sensitive file's contents with the master password and stores it in the local vault.
+ * Encrypts a sensitive file's contents with the native keychain master key and stores it in the local vault.
  */
 export async function encryptAndStoreSecret(
   filePath: string,
@@ -43,13 +28,13 @@ export async function encryptAndStoreSecret(
   storage: VaultStorage,
   sessionManager: VaultSessionManager
 ): Promise<boolean> {
-  const password = await getOrPromptVaultPassword(sessionManager);
-  if (!password) {
+  const masterKey = await sessionManager.getOrCreateMasterKey();
+  if (!masterKey) {
     return false;
   }
 
   try {
-    const payload = encryptSecret(content, password);
+    const payload = encryptSecret(content, masterKey);
     const secretEntry: VaultSecret = {
       filePath,
       relativePath,
@@ -69,7 +54,7 @@ export async function encryptAndStoreSecret(
 }
 
 /**
- * Decrypts a stored secret from the vault using the cached or prompted master password.
+ * Decrypts a stored secret from the vault using the native keychain master key.
  */
 export async function readAndDecryptSecret(
   filePath: string,
@@ -81,8 +66,9 @@ export async function readAndDecryptSecret(
     return null;
   }
 
-  const password = await getOrPromptVaultPassword(sessionManager);
-  if (!password) {
+  const masterKey = await sessionManager.getMasterKey();
+  if (!masterKey) {
+    vscode.window.showWarningMessage('ReMem: Native encryption key could not be retrieved from System Keychain.');
     return null;
   }
 
@@ -94,12 +80,12 @@ export async function readAndDecryptSecret(
         authTag: secret.authTag,
         keySalt: secret.keySalt,
       },
-      password
+      masterKey
     );
 
     return decrypted;
   } catch (err) {
-    vscode.window.showErrorMessage('ReMem: Decryption failed. Incorrect master password or corrupted ciphertext.');
+    vscode.window.showErrorMessage('ReMem: Decryption failed. Keychain key mismatch or corrupted ciphertext.');
     return null;
   }
 }
