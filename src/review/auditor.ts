@@ -7,6 +7,7 @@ import { ASTAnalyzer } from '../ast/analyzer.js';
 import { ScratchpadManager } from '../ast/scratchpad.js';
 import { shouldIgnorePath, getMemoryDirPath } from '../config.js';
 import { DiffAuditReport, DiffIssue } from '../types/index.js';
+import { OverbuildAuditor } from './overbuild.js';
 
 const MAX_FILE_SIZE_BYTES = 1024 * 1024; // 1 MB limit for safe inspections
 
@@ -174,6 +175,15 @@ export class LocalDiffAuditor {
         });
       }
     }
+
+    // 5. Lean Engine Overbuild Filter (dependencies, wrappers, boilerplate)
+    const overbuildAuditor = new OverbuildAuditor(this.workspaceRoot);
+    overbuildAuditor.auditDiffOverbuild(
+      diffSummary.files,
+      diffChunksMap,
+      this.astAnalyzer,
+      issues
+    );
 
     const reportMarkdown = this.formatMarkdownReport(
       currentBranch,
@@ -498,6 +508,7 @@ export class LocalDiffAuditor {
       sections.push('### ✅ Clean Bill of Health');
       sections.push('- No leftover debug markers or console logs detected in added lines.');
       sections.push('- All relative imports resolve successfully to valid modules.');
+      sections.push('- No overbuild, redundant wrappers, or unnecessary boilerplate files detected.');
       sections.push('- Delimiters and style rules are intact.');
       return sections.join('\n');
     }
@@ -537,7 +548,22 @@ export class LocalDiffAuditor {
       sections.push('');
     }
 
-    // 4. AST Blast Radius & Architectural Impact
+    // 4. Lean Engine Overbuild & Over-Engineering Warnings
+    const overbuildIssues = issues.filter((i) => i.type === 'overbuild');
+    if (overbuildIssues.length > 0) {
+      sections.push('## 🏗️ Lean Engine Overbuild & Over-Engineering Warnings');
+      for (const item of overbuildIssues) {
+        const lineStr = item.line ? `:${item.line}` : '';
+        const icon = item.severity === 'warning' ? '⚠️' : 'ℹ️';
+        sections.push(`- [ ] ${icon} **\`${item.relativePath}${lineStr}\`**: ${item.message}`);
+        if (item.snippet) {
+          sections.push(`  \`\`\`typescript\n  ${item.snippet}\n  \`\`\``);
+        }
+      }
+      sections.push('');
+    }
+
+    // 5. AST Blast Radius & Architectural Impact
     if (blastSummaries.length > 0) {
       sections.push('## 💥 AST Blast Radius & Impacted Modules');
       for (const item of blastSummaries) {

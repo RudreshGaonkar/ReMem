@@ -97,7 +97,7 @@ export interface DiffIssue {
   filePath: string;
   relativePath: string;
   line?: number;
-  type: 'debug_statement' | 'broken_import' | 'missing_export' | 'syntax_discrepancy' | 'style_rule' | 'blast_radius';
+  type: 'debug_statement' | 'broken_import' | 'missing_export' | 'syntax_discrepancy' | 'style_rule' | 'blast_radius' | 'overbuild';
   severity: DiffIssueSeverity;
   message: string;
   snippet?: string;

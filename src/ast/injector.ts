@@ -5,6 +5,7 @@ import { ASTAnalyzer } from './analyzer.js';
 import { ScratchpadManager } from './scratchpad.js';
 
 import { SpecTaskTracker } from '../task/tracker.js';
+import { getLeanRulesContext } from '../context/leanRules.js';
 
 export interface AssembleContextOptions {
   activeFilePath?: string;
@@ -13,6 +14,7 @@ export interface AssembleContextOptions {
   maxTurnAge?: number;
   taskTracker?: SpecTaskTracker;
   specTaskContext?: string;
+  includeLeanRules?: boolean;
 }
 
 /**
@@ -66,6 +68,14 @@ export async function assembleContext(
   const sections: string[] = [];
 
   sections.push('# 🧠 REMEM TOKEN-OPTIMIZED CONTEXT INJECTION');
+
+  // Lean Engine: Concise Decision Hierarchy prepended to AI prompts
+  if (options.includeLeanRules !== false) {
+    const leanRules = getLeanRulesContext();
+    if (leanRules) {
+      sections.push(`\n${leanRules}`);
+    }
+  }
 
   // 1. Active Build Phase & Spec Milestones (GSD Pattern)
   if (options.taskTracker) {

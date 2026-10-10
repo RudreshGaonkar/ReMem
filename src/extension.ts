@@ -18,6 +18,7 @@ import { assembleContext } from './ast/injector.js';
 import { EngineStatus } from './types/index.js';
 import { LocalDiffAuditor } from './review/auditor.js';
 import { SpecTaskTracker } from './task/tracker.js';
+import { TechDebtLedger } from './task/debt.js';
 
 // ─── Module-level singletons ──────────────────────────────────────────────────
 
@@ -31,6 +32,7 @@ let astAnalyzer: ASTAnalyzer | null = null;
 let scratchpad: ScratchpadManager | null = null;
 let diffAuditor: LocalDiffAuditor | null = null;
 let taskTracker: SpecTaskTracker | null = null;
+let techDebtLedger: TechDebtLedger | null = null;
 
 /** StatusBar item showing ReMem state with a toggle/sync click handler. */
 let statusBarItem: vscode.StatusBarItem | undefined;
@@ -90,7 +92,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand('remem.getContext', () => handleGetContextCommand()),
     vscode.commands.registerCommand('remem.toggleSync', () => handleToggleSyncCommand()),
     vscode.commands.registerCommand('remem.reviewDiff', () => handleReviewDiffCommand()),
-    vscode.commands.registerCommand('remem.syncTaskProgress', () => handleSyncTaskProgressCommand())
+    vscode.commands.registerCommand('remem.syncTaskProgress', () => handleSyncTaskProgressCommand()),
+    vscode.commands.registerCommand('remem.logDebt', () => handleLogDebtCommand())
   );
 
   const workspaceFolders = vscode.workspace.workspaceFolders;
@@ -165,6 +168,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
     // ── Local Diff Auditor (CodeRabbit Pattern) ────────────────────────────
     diffAuditor = new LocalDiffAuditor(workspaceRoot, dbManager, astAnalyzer, scratchpad, outputChannel);
+
+    // ── Tech Debt Ledger (Lean Engine) ─────────────────────────────────────
+    techDebtLedger = new TechDebtLedger(workspaceRoot, scratchpad, outputChannel);
 
     // ── Auto-sync task progress on document save ───────────────────────────
     const taskSaveWatcher = vscode.workspace.onDidSaveTextDocument((doc) => {
@@ -516,6 +522,41 @@ async function handleSyncTaskProgressCommand(): Promise<void> {
       `[ReMem Spec Tracker] Synced "${report.relativePath}": ${report.completedTasks}/${report.totalTasks} complete (${report.percentage}%). Active phase: "${report.activePhase?.title || 'None'}".`
     );
   }
+}
+
+/**
+ * Scans workspace files for tech debt and TODO shortcuts and records them in .recall_scratchpad.md.
+ */
+async function handleLogDebtCommand(): Promise<void> {
+  if (!techDebtLedger || !scratchpad) {
+    vscode.window.showWarningMessage('ReMem Tech Debt Ledger is not ready.');
+    return;
+  }
+
+  await vscode.window.withProgress(
+    {
+      location: vscode.ProgressLocation.Notification,
+      title: 'ReMem: Collecting Tech Debt & Shortcuts...',
+      cancellable: false,
+    },
+    async () => {
+      const result = await techDebtLedger!.collectAndRecordDebt();
+      outputChannel?.appendLine(
+        `[ReMem Tech Debt] Scanned ${result.filesScanned} file(s). Found ${result.totalItems} item(s) across ${result.filesWithDebt} file(s).`
+      );
+
+      // Open scratchpad in editor for user review
+      const scratchpadPath = scratchpad?.filePath;
+      if (scratchpadPath && fs.existsSync(scratchpadPath)) {
+        const doc = await vscode.workspace.openTextDocument(scratchpadPath);
+        await vscode.window.showTextDocument(doc, { preview: false });
+      }
+
+      vscode.window.showInformationMessage(
+        `ReMem: Collected ${result.totalItems} tech debt item(s) into .recall_scratchpad.md.`
+      );
+    }
+  );
 }
 
 /**
