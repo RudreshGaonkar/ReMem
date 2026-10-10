@@ -7,5 +7,5 @@ dist/
 .vscode-test/
 .DS_Store
 *.log
-antigravity_extension_master_prompt.md
+antigravity_extension.md
 Explanation.md
