@@ -4,11 +4,15 @@ import { getFormattedErrorContext } from '../git/ledger.js';
 import { ASTAnalyzer } from './analyzer.js';
 import { ScratchpadManager } from './scratchpad.js';
 
+import { SpecTaskTracker } from '../task/tracker.js';
+
 export interface AssembleContextOptions {
   activeFilePath?: string;
   activeBranch?: string;
   currentTurn?: number;
   maxTurnAge?: number;
+  taskTracker?: SpecTaskTracker;
+  specTaskContext?: string;
 }
 
 /**
@@ -63,7 +67,17 @@ export async function assembleContext(
 
   sections.push('# 🧠 REMEM TOKEN-OPTIMIZED CONTEXT INJECTION');
 
-  // 1. Active Scratchpad Plan
+  // 1. Active Build Phase & Spec Milestones (GSD Pattern)
+  if (options.taskTracker) {
+    const taskContext = options.taskTracker.getActiveTaskContext();
+    if (taskContext) {
+      sections.push(`\n${taskContext}`);
+    }
+  } else if (options.specTaskContext) {
+    sections.push(`\n${options.specTaskContext}`);
+  }
+
+  // 2. Active Scratchpad Plan
   const plan = scratchpad.getPlan().trim();
   if (plan) {
     sections.push(`\n## 🎯 ACTIVE EXECUTION PLAN (.recall_scratchpad.md)\n${plan}`);

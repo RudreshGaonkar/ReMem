@@ -2,7 +2,7 @@
   "name": "remem-context-engine",
   "displayName": "ReMem: AI Memory & Token Optimization Engine",
   "description": "Local RAG middleman, state manager, and token optimization engine for AI coding agents.",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "icon": "icon.png",
   "publisher": "RudreshGaonkar",
   "license": "MIT",
@@ -33,7 +33,9 @@
     "onCommand:remem.viewVaultSecrets",
     "onCommand:remem.getContext",
     "onCommand:remem.purgeMemory",
-    "onCommand:remem.toggleSync"
+    "onCommand:remem.toggleSync",
+    "onCommand:remem.reviewDiff",
+    "onCommand:remem.syncTaskProgress"
   ],
   "contributes": {
     "commands": [
@@ -88,6 +90,14 @@
       {
         "command": "remem.toggleSync",
         "title": "ReMem: Toggle Engine / Manual Sync"
+      },
+      {
+        "command": "remem.reviewDiff",
+        "title": "ReMem: Audit Active / Staged Diff"
+      },
+      {
+        "command": "remem.syncTaskProgress",
+        "title": "ReMem: Sync Spec & Task Progress"
       }
     ],
     "configuration": {

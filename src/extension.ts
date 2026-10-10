@@ -1,6 +1,7 @@
+import * as path from 'path';
 import * as vscode from 'vscode';
 import * as fs from 'fs';
-import { CONFIG, getMemoryDirPath } from './config.js';
+import { CONFIG, getMemoryDirPath, shouldIgnorePath } from './config.js';
 import { DatabaseManager } from './database/index.js';
 import { GitStateWatcher } from './git/watcher.js';
 import { getFormattedErrorContext } from './git/ledger.js';
@@ -15,6 +16,8 @@ import { ASTAnalyzer } from './ast/analyzer.js';
 import { ScratchpadManager } from './ast/scratchpad.js';
 import { assembleContext } from './ast/injector.js';
 import { EngineStatus } from './types/index.js';
+import { LocalDiffAuditor } from './review/auditor.js';
+import { SpecTaskTracker } from './task/tracker.js';
 
 // ─── Module-level singletons ──────────────────────────────────────────────────
 
@@ -26,6 +29,8 @@ let vaultStorage: VaultStorage | null = null;
 let vaultSession: VaultSessionManager | null = null;
 let astAnalyzer: ASTAnalyzer | null = null;
 let scratchpad: ScratchpadManager | null = null;
+let diffAuditor: LocalDiffAuditor | null = null;
+let taskTracker: SpecTaskTracker | null = null;
 
 /** StatusBar item showing ReMem state with a toggle/sync click handler. */
 let statusBarItem: vscode.StatusBarItem | undefined;
@@ -83,7 +88,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand('remem.encryptActiveFile', () => handleEncryptActiveFileCommand()),
     vscode.commands.registerCommand('remem.viewVaultSecrets', () => handleViewVaultSecretsCommand()),
     vscode.commands.registerCommand('remem.getContext', () => handleGetContextCommand()),
-    vscode.commands.registerCommand('remem.toggleSync', () => handleToggleSyncCommand())
+    vscode.commands.registerCommand('remem.toggleSync', () => handleToggleSyncCommand()),
+    vscode.commands.registerCommand('remem.reviewDiff', () => handleReviewDiffCommand()),
+    vscode.commands.registerCommand('remem.syncTaskProgress', () => handleSyncTaskProgressCommand())
   );
 
   const workspaceFolders = vscode.workspace.workspaceFolders;
@@ -152,6 +159,25 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       outputChannel?.appendLine(`[ReMem Indexer Error] Background indexing failed: ${err}`);
     });
 
+    // ── Spec & Task Sync Engine (GSD Pattern) ───────────────────────────────
+    taskTracker = new SpecTaskTracker(workspaceRoot, scratchpad, outputChannel);
+    await taskTracker.syncProgress(false);
+
+    // ── Local Diff Auditor (CodeRabbit Pattern) ────────────────────────────
+    diffAuditor = new LocalDiffAuditor(workspaceRoot, dbManager, astAnalyzer, scratchpad, outputChannel);
+
+    // ── Auto-sync task progress on document save ───────────────────────────
+    const taskSaveWatcher = vscode.workspace.onDidSaveTextDocument((doc) => {
+      if (taskTracker && doc.uri.scheme === 'file') {
+        const docPath = doc.uri.fsPath;
+        const fileName = path.basename(docPath).toLowerCase();
+        if (fileName.endsWith('.md') || !shouldIgnorePath(docPath)) {
+          taskTracker.syncProgress(false).catch(() => {});
+        }
+      }
+    });
+    context.subscriptions.push(taskSaveWatcher);
+
     // ── Periodically persist scratchpad to globalState ─────────────────────
     const scratchpadPersistTimer = setInterval(() => {
       if (scratchpad) {
@@ -196,6 +222,8 @@ export async function deactivate(): Promise<void> {
 
   astAnalyzer = null;
   scratchpad = null;
+  diffAuditor = null;
+  taskTracker = null;
 
   if (statusBarItem) {
     statusBarItem.dispose();
@@ -413,6 +441,7 @@ async function handleGetContextCommand(): Promise<void> {
   const assembledContext = await assembleContext(dbManager, scratchpad, astAnalyzer, {
     activeFilePath,
     activeBranch,
+    taskTracker: taskTracker || undefined,
   });
 
   // Copy to clipboard
@@ -425,6 +454,68 @@ async function handleGetContextCommand(): Promise<void> {
   });
   await vscode.window.showTextDocument(doc, { preview: true });
   vscode.window.showInformationMessage('ReMem: Token-optimized context generated and copied to clipboard.');
+}
+
+/**
+ * Audits active / staged Git working tree diff against AST dependencies and Orama context.
+ */
+async function handleReviewDiffCommand(): Promise<void> {
+  if (!diffAuditor) {
+    vscode.window.showWarningMessage('ReMem Diff Auditor is not ready.');
+    return;
+  }
+
+  await vscode.window.withProgress(
+    {
+      location: vscode.ProgressLocation.Notification,
+      title: 'ReMem: Auditing Git diff and AST dependencies...',
+      cancellable: false,
+    },
+    async () => {
+      const report = await diffAuditor!.auditDiff();
+      if (!report) {
+        return;
+      }
+
+      // Display in output channel
+      outputChannel?.appendLine(`\n${report.markdownReport}\n`);
+
+      // Open in a markdown editor tab for review
+      const doc = await vscode.workspace.openTextDocument({
+        language: 'markdown',
+        content: report.markdownReport,
+      });
+      await vscode.window.showTextDocument(doc, { preview: true });
+
+      const issueCount = report.issues.length;
+      if (issueCount === 0) {
+        vscode.window.showInformationMessage(
+          `ReMem Diff Audit: Clean! ${report.filesAudited} file(s) audited, 0 issues detected.`
+        );
+      } else {
+        vscode.window.showWarningMessage(
+          `ReMem Diff Audit: Audited ${report.filesAudited} file(s) with ${issueCount} item(s) flagged. Review opened in editor.`
+        );
+      }
+    }
+  );
+}
+
+/**
+ * Manually synchronizes spec checklists and phase progress into .recall_scratchpad.md.
+ */
+async function handleSyncTaskProgressCommand(): Promise<void> {
+  if (!taskTracker) {
+    vscode.window.showWarningMessage('ReMem Task Tracker is not ready.');
+    return;
+  }
+
+  const report = await taskTracker.syncProgress(true);
+  if (report) {
+    outputChannel?.appendLine(
+      `[ReMem Spec Tracker] Synced "${report.relativePath}": ${report.completedTasks}/${report.totalTasks} complete (${report.percentage}%). Active phase: "${report.activePhase?.title || 'None'}".`
+    );
+  }
 }
 
 /**
@@ -669,6 +760,12 @@ async function purgeMemory(workspaceRoot: string, context: vscode.ExtensionConte
     vaultStorage = new VaultStorage(workspaceRoot);
     vaultSession = new VaultSessionManager(context.secrets, workspaceRoot, outputChannel);
     pipeline.setVault(vaultStorage, vaultSession);
+
+    // Re-initialize diffAuditor and taskTracker
+    if (astAnalyzer && scratchpad) {
+      taskTracker = new SpecTaskTracker(workspaceRoot, scratchpad, outputChannel);
+      diffAuditor = new LocalDiffAuditor(workspaceRoot, dbManager, astAnalyzer, scratchpad, outputChannel);
+    }
 
     // Also clear the persisted scratchpad content from globalState
     await context.globalState.update(SCRATCHPAD_STATE_KEY, undefined);

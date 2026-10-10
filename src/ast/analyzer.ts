@@ -202,4 +202,41 @@ export class ASTAnalyzer {
   public get isReady(): boolean {
     return this.isParserReady;
   }
+
+  /**
+   * Returns known exported symbols for a file.
+   */
+  public getExports(filePath: string): string[] {
+    const exports = this.exportMap.get(filePath);
+    return exports ? Array.from(exports) : [];
+  }
+
+  /**
+   * Returns resolved imported file paths for a file.
+   */
+  public getImports(filePath: string): string[] {
+    const imports = this.importMap.get(filePath);
+    return imports ? Array.from(imports) : [];
+  }
+
+  /**
+   * Extracts named imports with their import sources from file content.
+   */
+  public extractNamedImports(content: string): { symbol: string; fromPath: string }[] {
+    const namedImports: { symbol: string; fromPath: string }[] = [];
+    const namedImportRegex = /import\s*\{([^}]+)\}\s*from\s*['"]([^'"]+)['"]/g;
+    let match: RegExpExecArray | null;
+    while ((match = namedImportRegex.exec(content)) !== null) {
+      const rawSymbols = match[1];
+      const fromPath = match[2];
+      const symbols = rawSymbols
+        .split(',')
+        .map((s) => s.trim().split(/\s+as\s+/)[0].trim())
+        .filter((s) => s.length > 0 && s !== 'type');
+      for (const symbol of symbols) {
+        namedImports.push({ symbol, fromPath });
+      }
+    }
+    return namedImports;
+  }
 }

@@ -87,3 +87,60 @@ export interface EngineStatus {
   vaultEntriesCount: number;
   isVaultUnlocked: boolean;
 }
+
+/**
+ * Local Diff Audit issues and results.
+ */
+export type DiffIssueSeverity = 'warning' | 'info' | 'error';
+
+export interface DiffIssue {
+  filePath: string;
+  relativePath: string;
+  line?: number;
+  type: 'debug_statement' | 'broken_import' | 'missing_export' | 'syntax_discrepancy' | 'style_rule' | 'blast_radius';
+  severity: DiffIssueSeverity;
+  message: string;
+  snippet?: string;
+}
+
+export interface DiffAuditReport {
+  timestamp: number;
+  branch: string;
+  totalFilesChanged: number;
+  filesAudited: number;
+  insertions: number;
+  deletions: number;
+  issues: DiffIssue[];
+  blastRadiusSummary: { file: string; dependentsCount: number; dependents: string[] }[];
+  markdownReport: string;
+}
+
+/**
+ * Spec & Task Sync structures.
+ */
+export interface ChecklistItem {
+  text: string;
+  completed: boolean;
+  line: number;
+}
+
+export interface PhaseInfo {
+  title: string;
+  level: number;
+  items: ChecklistItem[];
+  totalTasks: number;
+  completedTasks: number;
+  percentage: number;
+}
+
+export interface SpecFileReport {
+  filePath: string;
+  relativePath: string;
+  phases: PhaseInfo[];
+  totalTasks: number;
+  completedTasks: number;
+  percentage: number;
+  activePhase: PhaseInfo | null;
+  nextPendingTask: ChecklistItem | null;
+}
+
