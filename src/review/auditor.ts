@@ -156,6 +156,12 @@ export class LocalDiffAuditor {
       // 3. Project style rules compliance from .recall_scratchpad.md
       this.checkStyleRules(relPath, fullPath, fileContent, styleRules, issues);
 
+      // 4. Local AppSec danger pattern scanner (eval, innerHTML, dangerouslySetInnerHTML, JWT secrets, missing schemas)
+      this.auditLocalAppSecPatterns(relPath, fullPath, fileChunks.addedLines, fileContent, issues);
+
+      // 5. Strict Unicode Emoji linter rule (enforces standard UI icon libraries)
+      this.auditEmojiPolicy(relPath, fullPath, fileChunks.addedLines, issues);
+
       // 4. Cross-reference AST blast radius and Orama context
       const blastRadius = this.astAnalyzer.getBlastRadius(fullPath);
       if (blastRadius.dependents.length > 0) {
@@ -288,6 +294,165 @@ export class LocalDiffAuditor {
             snippet: trimmed.substring(0, 100),
           });
         }
+      }
+    }
+  }
+
+  /**
+   * Token-free, pure-local regex security audit scanning for OWASP Top 10 danger patterns:
+   * 1. eval() and dynamic code execution
+   * 2. innerHTML / outerHTML DOM manipulation (XSS)
+   * 3. dangerouslySetInnerHTML (React/JSX XSS)
+   * 4. Hardcoded JWT secrets & tokens
+   * 5. Lack of input validation schemas on route/request handlers
+   */
+  private auditLocalAppSecPatterns(
+    relPath: string,
+    fullPath: string,
+    addedLines: { lineNum: number; text: string }[],
+    fullContent: string,
+    issues: DiffIssue[]
+  ): void {
+    const secPatterns = [
+      {
+        regex: /\beval\s*\(/,
+        label: 'Arbitrary code execution via eval()',
+        severity: 'error' as const,
+        message: 'Direct eval() invocation detected. Creates severe Arbitrary Code Execution and Injection vulnerabilities.',
+      },
+      {
+        regex: /\bnew\s+Function\s*\(/,
+        label: 'Dynamic code execution via new Function()',
+        severity: 'error' as const,
+        message: 'Dynamic Function constructor detected. Violates Zero-Trust AppSec policy.',
+      },
+      {
+        regex: /\bsetTimeout\s*\(\s*['"`]/,
+        label: 'String-based setTimeout() execution',
+        severity: 'error' as const,
+        message: 'Passing string to setTimeout() compiles dynamically like eval(). Pass a function callback instead.',
+      },
+      {
+        regex: /\bsetInterval\s*\(\s*['"`]/,
+        label: 'String-based setInterval() execution',
+        severity: 'error' as const,
+        message: 'Passing string to setInterval() compiles dynamically like eval(). Pass a function callback instead.',
+      },
+      {
+        regex: /\b(?:\.innerHTML|\.outerHTML)\s*=/,
+        label: 'Direct DOM HTML assignment (innerHTML/outerHTML)',
+        severity: 'error' as const,
+        message: 'Unsafe DOM manipulation via innerHTML/outerHTML detected. Susceptible to Cross-Site Scripting (XSS). Use textContent or sanitized DOM APIs.',
+      },
+      {
+        regex: /dangerouslySetInnerHTML\s*=\s*\{\s*\{\s*__html\s*:/,
+        label: 'Unsafe React dangerouslySetInnerHTML usage',
+        severity: 'error' as const,
+        message: 'Unsafe dangerouslySetInnerHTML detected. Susceptible to Stored/Reflected XSS. Sanitize HTML or use standard JSX elements.',
+      },
+      {
+        regex: /\beyJ[a-zA-Z0-9_-]{10,}\.eyJ[a-zA-Z0-9_-]{10,}\.[a-zA-Z0-9._-]{10,}\b/,
+        label: 'Hardcoded JWT token in source code',
+        severity: 'error' as const,
+        message: 'Literal JWT token found in source code. Hardcoded credentials or tokens must never be committed. Store in ReMem Vault or environment variables.',
+      },
+      {
+        regex: /(?:jwt\.sign|jwt\.verify)\s*\([^,]+,\s*['"`][^'"`]{3,}['"`]/,
+        label: 'Hardcoded JWT secret parameter',
+        severity: 'error' as const,
+        message: 'Hardcoded secret passed directly to jwt.sign/jwt.verify. Secrets must be read from environment variables or secure vault.',
+      },
+      {
+        regex: /(?:jwt_secret|jwtSecret|jwt_key|jwtKey|token_secret|tokenSecret)\s*[:=]\s*['"][^'"]{4,}['"]/,
+        label: 'Hardcoded JWT secret assignment',
+        severity: 'error' as const,
+        message: 'Hardcoded JWT secret variable detected. Move secret keys to environment variables or the ReMem Vault.',
+      },
+    ];
+
+    for (const item of addedLines) {
+      const trimmed = item.text.trim();
+      // Skip comments
+      if (trimmed.startsWith('//') || trimmed.startsWith('/*') || trimmed.startsWith('*')) {
+        continue;
+      }
+
+      for (const pattern of secPatterns) {
+        if (pattern.regex.test(trimmed)) {
+          issues.push({
+            filePath: fullPath,
+            relativePath: relPath,
+            line: item.lineNum,
+            type: 'security_vulnerability',
+            severity: pattern.severity,
+            message: pattern.message,
+            snippet: trimmed.substring(0, 100),
+          });
+        }
+      }
+    }
+
+    // Check for route handlers consuming input without validation schemas
+    const endpointPattern = /(?:app|router)\.(?:post|put|patch|delete)\s*\(|req\.(?:body|query|params)\b/;
+    const hasEndpointInputInAddedLines = addedLines.some(
+      (l) => endpointPattern.test(l.text) && !l.text.trim().startsWith('//')
+    );
+
+    if (hasEndpointInputInAddedLines) {
+      const hasValidationSchema =
+        /\b(?:zod|joi|yup|validator|typebox|superstruct|ajv)\b/i.test(fullContent) ||
+        /\b(?:\.parse|\.safeParse|\.validate|\.validateAsync)\s*\(/i.test(fullContent) ||
+        /\b(?:validateSchema|schemaValidate|inputSchema)\b/i.test(fullContent);
+
+      if (!hasValidationSchema) {
+        const firstInputLine = addedLines.find((l) => /req\.(?:body|query|params)\b/.test(l.text));
+        issues.push({
+          filePath: fullPath,
+          relativePath: relPath,
+          line: firstInputLine ? firstInputLine.lineNum : undefined,
+          type: 'security_vulnerability',
+          severity: 'warning',
+          message: 'API handler consumes request input (req.body / req.query / req.params) without a schema validation library (Zod, Joi, Yup). Assume all input is hostile and enforce ingress validation.',
+          snippet: firstInputLine ? firstInputLine.text.trim().substring(0, 100) : undefined,
+        });
+      }
+    }
+  }
+
+  /**
+   * Rejects Unicode emojis in source code files, strictly enforcing standard UI icon libraries.
+   */
+  private auditEmojiPolicy(
+    relPath: string,
+    fullPath: string,
+    addedLines: { lineNum: number; text: string }[],
+    issues: DiffIssue[]
+  ): void {
+    const ext = path.extname(relPath).toLowerCase();
+    const sourceCodeExts = [
+      '.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs',
+      '.py', '.go', '.rs', '.java', '.c', '.cpp', '.h', '.hpp',
+      '.cs', '.php', '.rb', '.swift', '.kt'
+    ];
+
+    if (!sourceCodeExts.includes(ext)) {
+      return;
+    }
+
+    const emojiRegex = /[\u{1F300}-\u{1F5FF}\u{1F600}-\u{1F64F}\u{1F680}-\u{1F6FF}\u{1F700}-\u{1F77F}\u{1F780}-\u{1F7FF}\u{1F800}-\u{1F8FF}\u{1F900}-\u{1F9FF}\u{1FA00}-\u{1FA6F}\u{1FA70}-\u{1FAFF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}]/u;
+
+    for (const item of addedLines) {
+      const match = item.text.match(emojiRegex);
+      if (match) {
+        issues.push({
+          filePath: fullPath,
+          relativePath: relPath,
+          line: item.lineNum,
+          type: 'emoji_violation',
+          severity: 'error',
+          message: `Unicode emoji "${match[0]}" rejected in source code. ReMem strict style rule enforces standard UI icon libraries (e.g. Lucide, Codicons, FontAwesome) instead of raw emojis in source files.`,
+          snippet: item.text.trim().substring(0, 100),
+        });
       }
     }
   }
@@ -509,8 +674,39 @@ export class LocalDiffAuditor {
       sections.push('- No leftover debug markers or console logs detected in added lines.');
       sections.push('- All relative imports resolve successfully to valid modules.');
       sections.push('- No overbuild, redundant wrappers, or unnecessary boilerplate files detected.');
+      sections.push('- No OWASP danger patterns (eval, innerHTML, dangerouslySetInnerHTML, hardcoded secrets, unvalidated endpoints) detected.');
+      sections.push('- Zero Unicode emoji violations in source code (standard UI icon library policy upheld).');
       sections.push('- Delimiters and style rules are intact.');
       return sections.join('\n');
+    }
+
+    // 0. AppSec Security Vulnerabilities & Danger Patterns
+    const secIssues = issues.filter((i) => i.type === 'security_vulnerability');
+    if (secIssues.length > 0) {
+      sections.push('## 🛡️ AppSec Vulnerability & Danger Scanner (Zero-Trust Local Audit)');
+      for (const item of secIssues) {
+        const lineStr = item.line ? `:${item.line}` : '';
+        const icon = item.severity === 'error' ? '🔴 [HIGH]' : '🟡 [MEDIUM]';
+        sections.push(`- [ ] ${icon} **\`${item.relativePath}${lineStr}\`**: ${item.message}`);
+        if (item.snippet) {
+          sections.push(`  \`\`\`typescript\n  ${item.snippet}\n  \`\`\``);
+        }
+      }
+      sections.push('');
+    }
+
+    // 0.1 Emoji Policy Violations
+    const emojiIssues = issues.filter((i) => i.type === 'emoji_violation');
+    if (emojiIssues.length > 0) {
+      sections.push('## 🚫 Source Code Emoji & Icon Policy Violations');
+      for (const item of emojiIssues) {
+        const lineStr = item.line ? `:${item.line}` : '';
+        sections.push(`- [ ] ❌ **\`${item.relativePath}${lineStr}\`**: ${item.message}`);
+        if (item.snippet) {
+          sections.push(`  \`\`\`typescript\n  ${item.snippet}\n  \`\`\``);
+        }
+      }
+      sections.push('');
     }
 
     // 1. Leftover Debug Statements

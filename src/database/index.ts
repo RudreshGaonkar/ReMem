@@ -1,11 +1,11 @@
 import * as path from 'path';
 import { CONFIG, getDbFilePath, getMemoryDirPath } from '../config.js';
-import { ErrorLedgerEntry, FileSummary } from '../types/index.js';
+import { ASTChunk, ErrorLedgerEntry, FileSummary } from '../types/index.js';
 import { SqliteLedger } from './sqlite.js';
-import { SearchHitResult, VectorSearchEngine } from './vector.js';
+import { ASTChunkSearchResult, SearchHitResult, VectorSearchEngine } from './vector.js';
 
 export { SqliteLedger } from './sqlite.js';
-export { SearchHitResult, VectorSearchEngine } from './vector.js';
+export { ASTChunkSearchResult, SearchHitResult, VectorSearchEngine } from './vector.js';
 
 /**
  * Unified DatabaseManager orchestrating SQLite relational ledger and Orama search index.
@@ -145,11 +145,13 @@ export class DatabaseManager {
   }
 
   /**
-   * Removes a file summary from both SQLite and vector search.
+   * Removes a file summary from both SQLite and vector search, clearing chunks and dependencies.
    */
   public async deleteFileSummary(filePath: string): Promise<void> {
     this.sqlite.deleteFileSummary(filePath);
+    this.sqlite.clearDependenciesForFile(filePath);
     await this.vector.removeSummary(filePath);
+    await this.vector.removeChunksForFile(filePath);
   }
 
   /**
@@ -157,6 +159,20 @@ export class DatabaseManager {
    */
   public async searchSummaries(term: string, limit: number = 5): Promise<SearchHitResult[]> {
     return this.vector.searchSummaries(term, limit);
+  }
+
+  /**
+   * Performs semantic search across indexed AST chunks (functions, interfaces, classes).
+   */
+  public async searchChunks(term: string, limit: number = 5): Promise<ASTChunkSearchResult[]> {
+    return this.vector.searchChunks(term, limit);
+  }
+
+  /**
+   * Indexes a single AST chunk into Orama.
+   */
+  public async indexChunk(chunk: ASTChunk): Promise<void> {
+    await this.vector.indexChunk(chunk);
   }
 
   // ─── Error ledger ──────────────────────────────────────────────────────────

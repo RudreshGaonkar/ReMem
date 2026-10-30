@@ -97,10 +97,43 @@ export interface DiffIssue {
   filePath: string;
   relativePath: string;
   line?: number;
-  type: 'debug_statement' | 'broken_import' | 'missing_export' | 'syntax_discrepancy' | 'style_rule' | 'blast_radius' | 'overbuild';
+  type: 'debug_statement' | 'broken_import' | 'missing_export' | 'syntax_discrepancy' | 'style_rule' | 'blast_radius' | 'overbuild' | 'security_vulnerability' | 'emoji_violation';
   severity: DiffIssueSeverity;
   message: string;
   snippet?: string;
+}
+
+/**
+ * AST Code Chunk for granular indexing and retrieval.
+ */
+export interface ASTChunk {
+  id: string; // e.g. `${relativePath}#${name}`
+  filePath: string;
+  relativePath: string;
+  name: string;
+  kind: 'function' | 'class' | 'interface' | 'type' | 'method';
+  startLine: number;
+  endLine: number;
+  signature: string;
+  content: string;
+  tokenEstimate: number;
+}
+
+/**
+ * Lean Traceability Dependency Record stored in SQLite ledger.
+ */
+export interface FileDependencyRecord {
+  sourceFile: string;
+  importedFile: string;
+  importStatement?: string;
+  timestamp: number;
+}
+
+export interface FileExportRecord {
+  filePath: string;
+  symbol: string;
+  kind?: string;
+  timestamp: number;
 }
 
 export interface DiffAuditReport {

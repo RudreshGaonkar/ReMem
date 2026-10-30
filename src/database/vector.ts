@@ -1,5 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import { ASTChunk } from '../types/index.js';
 
 export interface OramaSummaryDoc {
   id?: string;
@@ -18,6 +19,21 @@ export interface SearchHitResult {
   };
 }
 
+export interface ASTChunkSearchResult {
+  id: string;
+  score: number;
+  document: {
+    chunkId: string;
+    filePath: string;
+    relativePath: string;
+    name: string;
+    kind: string;
+    signature: string;
+    summary: string;
+    content: string;
+  };
+}
+
 // Holds dynamically loaded Orama module functions (compatible with CommonJS runtime)
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let oramaModule: any = null;
@@ -31,12 +47,15 @@ async function getOramaModule() {
 
 /**
  * Manages local embedded semantic and full-text search using @orama/orama.
+ * Supports both high-level file summaries and granular AST code chunks.
  */
 export class VectorSearchEngine {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private orama: any = null;
   private indexPath: string;
   private fileIdMap: Map<string, string> = new Map(); // filePath -> orama internal ID
+  private chunkIdMap: Map<string, string> = new Map(); // chunkId -> orama internal ID
+  private fileChunksMap: Map<string, Set<string>> = new Map(); // filePath -> Set<chunkId>
 
   constructor(indexPath: string) {
     this.indexPath = indexPath;
@@ -51,7 +70,12 @@ export class VectorSearchEngine {
     const schema = {
       filePath: 'string',
       relativePath: 'string',
+      chunkId: 'string',
+      name: 'string',
+      kind: 'string',
+      signature: 'string',
       summary: 'string',
+      content: 'string',
     } as const;
 
     this.orama = await create({ schema });
@@ -64,6 +88,14 @@ export class VectorSearchEngine {
           await load(this.orama, parsed.oramaData);
           if (parsed.fileIdMap) {
             this.fileIdMap = new Map(Object.entries(parsed.fileIdMap));
+          }
+          if (parsed.chunkIdMap) {
+            this.chunkIdMap = new Map(Object.entries(parsed.chunkIdMap));
+          }
+          if (parsed.fileChunksMap) {
+            this.fileChunksMap = new Map(
+              Object.entries(parsed.fileChunksMap).map(([k, v]) => [k, new Set(v as string[])])
+            );
           }
         }
       } catch (err) {
@@ -89,7 +121,12 @@ export class VectorSearchEngine {
     const id = await insert(this.orama, {
       filePath: doc.filePath,
       relativePath: doc.relativePath,
+      chunkId: `file:${doc.filePath}`,
+      name: path.basename(doc.filePath),
+      kind: 'file',
+      signature: path.basename(doc.filePath),
       summary: doc.summary,
+      content: doc.summary,
     });
 
     this.fileIdMap.set(doc.filePath, id);
@@ -116,6 +153,84 @@ export class VectorSearchEngine {
   }
 
   /**
+   * Inserts or updates an individual AST chunk (function, interface, class) in Orama.
+   */
+  public async indexChunk(chunk: ASTChunk): Promise<void> {
+    if (!this.orama) {
+      throw new Error('Vector index is not initialized.');
+    }
+
+    const { insert, remove } = await getOramaModule();
+
+    // Remove old chunk instance if already mapped
+    const existingInternalId = this.chunkIdMap.get(chunk.id);
+    if (existingInternalId) {
+      try {
+        await remove(this.orama, existingInternalId);
+      } catch {
+        // ignore
+      }
+      this.chunkIdMap.delete(chunk.id);
+    }
+
+    const id = await insert(this.orama, {
+      filePath: chunk.filePath,
+      relativePath: chunk.relativePath,
+      chunkId: chunk.id,
+      name: chunk.name,
+      kind: chunk.kind,
+      signature: chunk.signature || chunk.name,
+      summary: `${chunk.kind} ${chunk.name}: ${chunk.signature}`,
+      content: chunk.content,
+    });
+
+    this.chunkIdMap.set(chunk.id, id);
+
+    if (!this.fileChunksMap.has(chunk.filePath)) {
+      this.fileChunksMap.set(chunk.filePath, new Set());
+    }
+    this.fileChunksMap.get(chunk.filePath)!.add(chunk.id);
+  }
+
+  /**
+   * Indexes multiple AST chunks in batch.
+   */
+  public async indexChunks(chunks: ASTChunk[]): Promise<void> {
+    for (const chunk of chunks) {
+      await this.indexChunk(chunk);
+    }
+  }
+
+  /**
+   * Removes all AST chunks associated with a specific file.
+   */
+  public async removeChunksForFile(filePath: string): Promise<void> {
+    if (!this.orama) {
+      return;
+    }
+
+    const chunkIds = this.fileChunksMap.get(filePath);
+    if (!chunkIds) {
+      return;
+    }
+
+    const { remove } = await getOramaModule();
+    for (const chunkId of chunkIds) {
+      const internalId = this.chunkIdMap.get(chunkId);
+      if (internalId) {
+        try {
+          await remove(this.orama, internalId);
+        } catch {
+          // ignore
+        }
+        this.chunkIdMap.delete(chunkId);
+      }
+    }
+
+    this.fileChunksMap.delete(filePath);
+  }
+
+  /**
    * Searches indexed summaries matching a query string.
    */
   public async searchSummaries(term: string, limit: number = 5): Promise<SearchHitResult[]> {
@@ -130,22 +245,70 @@ export class VectorSearchEngine {
       limit,
       properties: ['summary', 'relativePath', 'filePath'],
       threshold: 0.2,
+      where: {
+        kind: 'file',
+      },
     });
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     return searchResults.hits.map((hit: any) => ({
       id: hit.id,
       score: hit.score,
-      document: hit.document as {
-        filePath: string;
-        relativePath: string;
-        summary: string;
+      document: {
+        filePath: hit.document.filePath,
+        relativePath: hit.document.relativePath,
+        summary: hit.document.summary,
       },
     }));
   }
 
   /**
-   * Returns total number of indexed summaries.
+   * Searches AST chunks (functions, classes, interfaces) matching a query term.
+   */
+  public async searchChunks(term: string, limit: number = 5): Promise<ASTChunkSearchResult[]> {
+    if (!this.orama) {
+      return [];
+    }
+
+    const { search } = await getOramaModule();
+
+    const searchResults = await search(this.orama, {
+      term,
+      limit,
+      properties: ['name', 'signature', 'summary', 'content', 'relativePath'],
+      threshold: 0.2,
+    });
+
+    // Filter out top-level file summary docs to return actual AST chunks
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return searchResults.hits
+      .filter((hit: any) => hit.document.kind !== 'file')
+      .map((hit: any) => ({
+        id: hit.id,
+        score: hit.score,
+        document: {
+          chunkId: hit.document.chunkId,
+          filePath: hit.document.filePath,
+          relativePath: hit.document.relativePath,
+          name: hit.document.name,
+          kind: hit.document.kind,
+          signature: hit.document.signature,
+          summary: hit.document.summary,
+          content: hit.document.content,
+        },
+      }));
+  }
+
+  /**
+   * Returns all chunk IDs currently tracked for a file.
+   */
+  public getChunkIdsForFile(filePath: string): string[] {
+    const set = this.fileChunksMap.get(filePath);
+    return set ? Array.from(set) : [];
+  }
+
+  /**
+   * Returns total number of indexed entries (file summaries + AST chunks).
    */
   public async getCount(): Promise<number> {
     if (!this.orama) {
@@ -168,6 +331,10 @@ export class VectorSearchEngine {
     const serialized = JSON.stringify({
       oramaData,
       fileIdMap: Object.fromEntries(this.fileIdMap.entries()),
+      chunkIdMap: Object.fromEntries(this.chunkIdMap.entries()),
+      fileChunksMap: Object.fromEntries(
+        Array.from(this.fileChunksMap.entries()).map(([k, set]) => [k, Array.from(set)])
+      ),
       savedAt: Date.now(),
     });
 
@@ -186,5 +353,7 @@ export class VectorSearchEngine {
     await this.saveToDisk();
     this.orama = null;
     this.fileIdMap.clear();
+    this.chunkIdMap.clear();
+    this.fileChunksMap.clear();
   }
 }

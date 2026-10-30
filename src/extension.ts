@@ -19,6 +19,8 @@ import { EngineStatus } from './types/index.js';
 import { LocalDiffAuditor } from './review/auditor.js';
 import { SpecTaskTracker } from './task/tracker.js';
 import { TechDebtLedger } from './task/debt.js';
+import { ASTContextChunker } from './context/chunker.js';
+import { LeanTraceabilityTracker } from './task/traceability.js';
 
 // ─── Module-level singletons ──────────────────────────────────────────────────
 
@@ -33,6 +35,8 @@ let scratchpad: ScratchpadManager | null = null;
 let diffAuditor: LocalDiffAuditor | null = null;
 let taskTracker: SpecTaskTracker | null = null;
 let techDebtLedger: TechDebtLedger | null = null;
+let astChunker: ASTContextChunker | null = null;
+let traceabilityTracker: LeanTraceabilityTracker | null = null;
 
 /** StatusBar item showing ReMem state with a toggle/sync click handler. */
 let statusBarItem: vscode.StatusBarItem | undefined;
@@ -142,15 +146,19 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         : `[ReMem Scratchpad] Scratchpad initialized with default template.`
     );
 
-    // ── AST Dependency Analyzer ─────────────────────────────────────────────
+    // ── AST Dependency Analyzer & Context Chunker ──────────────────────────
     astAnalyzer = new ASTAnalyzer();
     await astAnalyzer.initialize();
     astAnalyzer.buildDependencyGraph(workspaceRoot).catch((err) => {
       outputChannel?.appendLine(`[ReMem AST Error] Dependency scan error: ${err}`);
     });
 
+    astChunker = new ASTContextChunker();
+    traceabilityTracker = new LeanTraceabilityTracker(workspaceRoot, dbManager, astAnalyzer);
+    traceabilityTracker.scanWorkspace(150).catch(() => {});
+
     // ── File watcher (on-save summarization) ───────────────────────────────
-    setupFileWatcher(context, dbManager, pipeline, outputChannel);
+    setupFileWatcher(context, dbManager, pipeline, outputChannel, traceabilityTracker);
 
     // ── Git State Watcher ──────────────────────────────────────────────────
     gitWatcher = new GitStateWatcher(workspaceRoot, dbManager, outputChannel);
@@ -230,6 +238,8 @@ export async function deactivate(): Promise<void> {
   scratchpad = null;
   diffAuditor = null;
   taskTracker = null;
+  astChunker = null;
+  traceabilityTracker = null;
 
   if (statusBarItem) {
     statusBarItem.dispose();
@@ -448,6 +458,8 @@ async function handleGetContextCommand(): Promise<void> {
     activeFilePath,
     activeBranch,
     taskTracker: taskTracker || undefined,
+    astChunker: astChunker || undefined,
+    traceabilityTracker: traceabilityTracker || undefined,
   });
 
   // Copy to clipboard

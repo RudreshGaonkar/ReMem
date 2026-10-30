@@ -7,6 +7,7 @@ import { computeFileHash, estimateTokenCount } from './hasher.js';
 import { encryptSecret } from '../vault/crypto.js';
 import type { VaultStorage } from '../vault/storage.js';
 import type { VaultSessionManager } from '../vault/session.js';
+import { ASTContextChunker } from '../context/chunker.js';
 
 /**
  * SummarizerPipeline processes source code and generates 1-2 sentence structural summaries.
@@ -15,6 +16,7 @@ export class SummarizerPipeline {
   private dbManager: DatabaseManager;
   private vaultStorage?: VaultStorage;
   private vaultSession?: VaultSessionManager;
+  private chunker: ASTContextChunker = new ASTContextChunker();
 
   constructor(dbManager: DatabaseManager) {
     this.dbManager = dbManager;
@@ -87,6 +89,11 @@ export class SummarizerPipeline {
       }
     } else {
       summaryText = this.generateStructuralSummary(filePath, content);
+      try {
+        await this.chunker.indexFileChunks(filePath, relativePath, content, this.dbManager.vector);
+      } catch (err) {
+        // Fallback: non-fatal if chunking encounters unparseable syntax
+      }
     }
 
     const fileSummary: FileSummary = {

@@ -3,9 +3,11 @@ import { DatabaseManager } from '../database/index.js';
 import { getFormattedErrorContext } from '../git/ledger.js';
 import { ASTAnalyzer } from './analyzer.js';
 import { ScratchpadManager } from './scratchpad.js';
-
 import { SpecTaskTracker } from '../task/tracker.js';
 import { getLeanRulesContext } from '../context/leanRules.js';
+import { getZeroTrustSecurityPersonaContext } from '../context/security.js';
+import { ASTContextChunker } from '../context/chunker.js';
+import { LeanTraceabilityTracker } from '../task/traceability.js';
 
 export interface AssembleContextOptions {
   activeFilePath?: string;
@@ -15,6 +17,9 @@ export interface AssembleContextOptions {
   taskTracker?: SpecTaskTracker;
   specTaskContext?: string;
   includeLeanRules?: boolean;
+  includeSecurityPersona?: boolean;
+  astChunker?: ASTContextChunker;
+  traceabilityTracker?: LeanTraceabilityTracker;
 }
 
 /**
@@ -53,10 +58,14 @@ export class LRUContextManager {
 
 /**
  * Assembles a token-optimized, consolidated prompt context block combining:
- * 1. Active file structural summary
- * 2. AST Blast Radius (dependent files that import it + their summaries)
- * 3. Error Ledger post-mortem warnings
- * 4. Multi-step plan from .recall_scratchpad.md
+ * 1. Zero-Trust AppSec Engineer Persona (Pre-generation OWASP Top 10 defense)
+ * 2. Lean Engine Decision Hierarchy
+ * 3. Active build phase & spec checklist
+ * 4. Active execution plan from .recall_scratchpad.md
+ * 5. Active file summary
+ * 6. Most relevant AST chunks (web-tree-sitter functions, classes, interfaces)
+ * 7. Ripple Effect Warning from SQLite Lean Traceability Ledger
+ * 8. Error Ledger post-mortem warnings
  */
 export async function assembleContext(
   dbManager: DatabaseManager,
@@ -69,7 +78,15 @@ export async function assembleContext(
 
   sections.push('# 🧠 REMEM TOKEN-OPTIMIZED CONTEXT INJECTION');
 
-  // Lean Engine: Concise Decision Hierarchy prepended to AI prompts
+  // 1. Permanent Zero-Trust AppSec Engineer Persona (Pre-generation OWASP defense)
+  if (options.includeSecurityPersona !== false) {
+    const securityPersona = getZeroTrustSecurityPersonaContext();
+    if (securityPersona) {
+      sections.push(`\n${securityPersona}`);
+    }
+  }
+
+  // 2. Lean Engine: Concise Decision Hierarchy prepended to AI prompts
   if (options.includeLeanRules !== false) {
     const leanRules = getLeanRulesContext();
     if (leanRules) {
@@ -77,7 +94,7 @@ export async function assembleContext(
     }
   }
 
-  // 1. Active Build Phase & Spec Milestones (GSD Pattern)
+  // 3. Active Build Phase & Spec Milestones (GSD Pattern)
   if (options.taskTracker) {
     const taskContext = options.taskTracker.getActiveTaskContext();
     if (taskContext) {
@@ -87,42 +104,73 @@ export async function assembleContext(
     sections.push(`\n${options.specTaskContext}`);
   }
 
-  // 2. Active Scratchpad Plan
+  // 4. Active Scratchpad Plan
   const plan = scratchpad.getPlan().trim();
   if (plan) {
     sections.push(`\n## 🎯 ACTIVE EXECUTION PLAN (.recall_scratchpad.md)\n${plan}`);
   }
 
-  // 2. Active File Summary
+  // 5. Active File Summary & Relevant AST Chunks
   if (activeFilePath) {
     const activeSummary = dbManager.getFileSummary(activeFilePath);
     const relPath = path.relative(scratchpad.rootPath, activeFilePath);
 
-    sections.push(`\n## 📄 ACTIVE FILE CONTEXT (${relPath})`);
+    sections.push(`\n## 📄 ACTIVE FILE CONTEXT (\`${relPath}\`)`);
     if (activeSummary) {
       sections.push(`- **Summary:** ${activeSummary.summary}`);
       sections.push(`- **Estimated Tokens:** ~${activeSummary.tokenCountEstimate} | **Encrypted:** ${activeSummary.isEncrypted}`);
     } else {
-      sections.push(`- **File:** ${relPath} (Unindexed or new file)`);
+      sections.push(`- **File:** \`${relPath}\` (Unindexed or new file)`);
     }
 
-    // 3. AST Blast Radius (Dependents)
-    const blastRadius = astAnalyzer.getBlastRadius(activeFilePath);
-    if (blastRadius.dependents.length > 0) {
-      sections.push(`\n## 💥 AST BLAST RADIUS (Files that import this module)`);
-      for (const depPath of blastRadius.dependents.slice(0, 5)) {
-        const depRel = path.relative(scratchpad.rootPath, depPath);
-        const depSummary = dbManager.getFileSummary(depPath);
-        const summaryText = depSummary ? `: ${depSummary.summary}` : '';
-        sections.push(`- \`${depRel}\`${summaryText}`);
+    // 6. Granular AST Context Chunks (web-tree-sitter: functions, interfaces, classes)
+    const chunker = options.astChunker || new ASTContextChunker();
+    try {
+      const relevantChunks = await chunker.getRelevantChunks(activeFilePath, dbManager.vector, {
+        maxChunks: 3,
+        relativePath: relPath,
+      });
+
+      if (relevantChunks.length > 0) {
+        sections.push(`\n## 🧩 RELEVANT AST CODE CHUNKS (Token-Optimized Retrieval)`);
+        for (const chunk of relevantChunks) {
+          const linesLabel = chunk.startLine ? ` (lines ${chunk.startLine}-${chunk.endLine})` : '';
+          sections.push(`\n### ${chunk.kind.toUpperCase()}: \`${chunk.name}\`${linesLabel}`);
+          sections.push('```typescript');
+          sections.push(chunk.content);
+          sections.push('```');
+        }
       }
-      if (blastRadius.dependents.length > 5) {
-        sections.push(`- *...and ${blastRadius.dependents.length - 5} more dependent files.*`);
+    } catch {
+      // Non-blocking fallback
+    }
+
+    // 7. Ripple Effect Warning (Lean Traceability Tracker)
+    const tracker =
+      options.traceabilityTracker ||
+      new LeanTraceabilityTracker(scratchpad.rootPath, dbManager, astAnalyzer);
+    const rippleWarning = tracker.generateRippleEffectWarning(activeFilePath);
+    if (rippleWarning) {
+      sections.push(`\n${rippleWarning}`);
+    } else {
+      // Fallback: AST Blast Radius (Dependents)
+      const blastRadius = astAnalyzer.getBlastRadius(activeFilePath);
+      if (blastRadius.dependents.length > 0) {
+        sections.push(`\n## 💥 AST BLAST RADIUS (Files that import this module)`);
+        for (const depPath of blastRadius.dependents.slice(0, 5)) {
+          const depRel = path.relative(scratchpad.rootPath, depPath);
+          const depSummary = dbManager.getFileSummary(depPath);
+          const summaryText = depSummary ? `: ${depSummary.summary}` : '';
+          sections.push(`- \`${depRel}\`${summaryText}`);
+        }
+        if (blastRadius.dependents.length > 5) {
+          sections.push(`- *...and ${blastRadius.dependents.length - 5} more dependent files.*`);
+        }
       }
     }
   }
 
-  // 4. Git Branch & Rollback Error Ledger
+  // 8. Git Branch & Rollback Error Ledger
   const errorWarnings = getFormattedErrorContext(dbManager, activeFilePath, activeBranch);
   if (errorWarnings) {
     sections.push(`\n## ⚠️ PAST ATTEMPTS & ERROR LEDGER\n${errorWarnings}`);

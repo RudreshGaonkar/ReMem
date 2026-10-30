@@ -88,6 +88,33 @@ export class SqliteLedger {
         resolved INTEGER NOT NULL DEFAULT 0
       );
     `);
+
+    // Table: Lean Traceability File Dependencies
+    this.db.run(`
+      CREATE TABLE IF NOT EXISTS file_dependencies (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        sourceFile TEXT NOT NULL,
+        importedFile TEXT NOT NULL,
+        importStatement TEXT,
+        timestamp INTEGER NOT NULL,
+        UNIQUE(sourceFile, importedFile)
+      );
+      CREATE INDEX IF NOT EXISTS idx_dep_imported ON file_dependencies(importedFile);
+      CREATE INDEX IF NOT EXISTS idx_dep_source ON file_dependencies(sourceFile);
+    `);
+
+    // Table: File Exports
+    this.db.run(`
+      CREATE TABLE IF NOT EXISTS file_exports (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        filePath TEXT NOT NULL,
+        symbol TEXT NOT NULL,
+        kind TEXT,
+        timestamp INTEGER NOT NULL,
+        UNIQUE(filePath, symbol)
+      );
+      CREATE INDEX IF NOT EXISTS idx_exp_file ON file_exports(filePath);
+    `);
   }
 
   /**
@@ -109,7 +136,7 @@ export class SqliteLedger {
   }
 
   /**
-   * Returns `true` when both required tables are present in the loaded database.
+   * Returns `true` when required tables are present in the loaded database.
    */
   public isSchemaIntact(): boolean {
     if (!this.db) {
@@ -118,10 +145,10 @@ export class SqliteLedger {
     try {
       const res = this.db.exec(`
         SELECT COUNT(*) as c FROM sqlite_master
-        WHERE type='table' AND name IN ('file_summaries', 'error_ledger')
+        WHERE type='table' AND name IN ('file_summaries', 'error_ledger', 'file_dependencies', 'file_exports')
       `);
       const count = Number(res?.[0]?.values?.[0]?.[0] ?? 0);
-      return count === 2;
+      return count >= 2;
     } catch {
       return false;
     }
@@ -346,6 +373,132 @@ export class SqliteLedger {
       return Number(res[0].values[0][0]);
     }
     return 0;
+  }
+
+  // ─── Lean Traceability Dependency & Export Ledger ────────────────────────
+
+  /**
+   * Records or replaces dependencies for a source file.
+   */
+  public recordDependencies(
+    sourceFile: string,
+    dependencies: { importedFile: string; importStatement?: string }[]
+  ): void {
+    if (!this.db) {
+      throw new Error('Database is not initialized.');
+    }
+
+    this.db.run(`DELETE FROM file_dependencies WHERE sourceFile = ?`, [sourceFile]);
+
+    const stmt = this.db.prepare(`
+      INSERT OR REPLACE INTO file_dependencies (sourceFile, importedFile, importStatement, timestamp)
+      VALUES (?, ?, ?, ?)
+    `);
+
+    const now = Date.now();
+    for (const dep of dependencies) {
+      stmt.run([sourceFile, dep.importedFile, dep.importStatement || null, now]);
+    }
+    stmt.free();
+  }
+
+  /**
+   * Records or replaces exports for a file.
+   */
+  public recordExports(filePath: string, exports: { symbol: string; kind?: string }[]): void {
+    if (!this.db) {
+      throw new Error('Database is not initialized.');
+    }
+
+    this.db.run(`DELETE FROM file_exports WHERE filePath = ?`, [filePath]);
+
+    const stmt = this.db.prepare(`
+      INSERT OR REPLACE INTO file_exports (filePath, symbol, kind, timestamp)
+      VALUES (?, ?, ?, ?)
+    `);
+
+    const now = Date.now();
+    for (const exp of exports) {
+      stmt.run([filePath, exp.symbol, exp.kind || null, now]);
+    }
+    stmt.free();
+  }
+
+  /**
+   * Returns all source files that depend on (import) the target file path.
+   */
+  public getDependentsForFile(targetFilePath: string): string[] {
+    if (!this.db) {
+      return [];
+    }
+
+    const dependents: string[] = [];
+    const stmt = this.db.prepare(`
+      SELECT DISTINCT sourceFile FROM file_dependencies WHERE importedFile = ?
+    `);
+    stmt.bind([targetFilePath]);
+
+    while (stmt.step()) {
+      const row = stmt.getAsObject();
+      dependents.push(row.sourceFile as string);
+    }
+    stmt.free();
+    return dependents;
+  }
+
+  /**
+   * Returns all files imported by the source file.
+   */
+  public getDependenciesForFile(sourceFile: string): string[] {
+    if (!this.db) {
+      return [];
+    }
+
+    const imports: string[] = [];
+    const stmt = this.db.prepare(`
+      SELECT DISTINCT importedFile FROM file_dependencies WHERE sourceFile = ?
+    `);
+    stmt.bind([sourceFile]);
+
+    while (stmt.step()) {
+      const row = stmt.getAsObject();
+      imports.push(row.importedFile as string);
+    }
+    stmt.free();
+    return imports;
+  }
+
+  /**
+   * Returns all exported symbols for a file from the SQLite ledger.
+   */
+  public getExportsForFile(filePath: string): string[] {
+    if (!this.db) {
+      return [];
+    }
+
+    const symbols: string[] = [];
+    const stmt = this.db.prepare(`
+      SELECT symbol FROM file_exports WHERE filePath = ?
+    `);
+    stmt.bind([filePath]);
+
+    while (stmt.step()) {
+      const row = stmt.getAsObject();
+      symbols.push(row.symbol as string);
+    }
+    stmt.free();
+    return symbols;
+  }
+
+  /**
+   * Clears dependency records for a file (e.g. when deleted).
+   */
+  public clearDependenciesForFile(filePath: string): void {
+    if (!this.db) {
+      return;
+    }
+    this.db.run(`DELETE FROM file_dependencies WHERE sourceFile = ? OR importedFile = ?`, [filePath, filePath]);
+    this.db.run(`DELETE FROM file_exports WHERE filePath = ?`, [filePath]);
   }
 
   /**

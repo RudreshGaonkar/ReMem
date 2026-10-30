@@ -6,6 +6,7 @@ import { DatabaseManager } from '../database/index.js';
 import { shouldIgnorePath } from '../config.js';
 import { computeFileHash } from './hasher.js';
 import { SummarizerPipeline } from './pipeline.js';
+import type { LeanTraceabilityTracker } from '../task/traceability.js';
 
 /**
  * Sets up document save, delete, and rename watchers to automatically keep summaries updated.
@@ -14,7 +15,8 @@ export function setupFileWatcher(
   context: vscode.ExtensionContext,
   dbManager: DatabaseManager,
   pipeline: SummarizerPipeline,
-  outputChannel?: vscode.OutputChannel
+  outputChannel?: vscode.OutputChannel,
+  traceabilityTracker?: LeanTraceabilityTracker
 ): void {
   // 1. Watch for file saves
   const saveListener = vscode.workspace.onDidSaveTextDocument(async (document: vscode.TextDocument) => {
@@ -39,6 +41,15 @@ export function setupFileWatcher(
     try {
       const content = document.getText();
       const currentHash = computeFileHash(content);
+
+      // Parse imports & exports to update SQLite traceability ledger on file save
+      if (traceabilityTracker) {
+        try {
+          await traceabilityTracker.processSavedFile(filePath, content);
+        } catch {
+          // Non-blocking
+        }
+      }
 
       // Check existing hash in SQLite
       const existing = dbManager.getFileSummary(filePath);
