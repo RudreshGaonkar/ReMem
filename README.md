@@ -5,7 +5,7 @@
 **Supercharge AI coding assistants with local RAG, persistent knowledge graphs, AST blast radius tracking, strict workspace isolation, and 95%+ prompt token reduction.**
 
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.6-3178C6.svg?style=for-the-badge&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
-[![VS Code Extension](https://img.shields.io/badge/VS%20Code-Extension%20v0.1.6-007ACC.svg?style=for-the-badge&logo=visualstudiocode&logoColor=white)](https://marketplace.visualstudio.com/)
+[![VS Code Extension](https://img.shields.io/badge/VS%20Code-Extension%20v0.0.6-007ACC.svg?style=for-the-badge&logo=visualstudiocode&logoColor=white)](https://marketplace.visualstudio.com/)
 [![SQLite WASM](https://img.shields.io/badge/SQLite-WebAssembly-003B57.svg?style=for-the-badge&logo=sqlite&logoColor=white)](https://sql.js.org/)
 [![Orama Vector](https://img.shields.io/badge/Orama-Embedded%20Search-FF6600.svg?style=for-the-badge)](https://oramasearch.com/)
 [![Worker Threads](https://img.shields.io/badge/Node.js-Worker%20Threads%20Async-339933.svg?style=for-the-badge&logo=nodedotjs&logoColor=white)](https://nodejs.org/api/worker_threads.html)
@@ -14,7 +14,7 @@
 
 <p align="center">
   <a href="#-key-features">Features</a> •
-  <a href="#-whats-new-in-v016-stability-graph--isolation-engine">What's New in v0.1.6</a> •
+  <a href="#-whats-new-in-v006-stability-graph--isolation-engine">What's New in v0.0.6</a> •
   <a href="#-how-it-works-architecture">Architecture</a> •
   <a href="#-quick-start--installation">Quick Start</a> •
   <a href="#-token-optimization-benchmark">Benchmarks</a> •
@@ -42,9 +42,9 @@ By mapping the codebase incrementally, generating 1–2 sentence structural summ
 
 ---
 
-## 🚀 What's New in v0.1.6: Stability, Graph & Isolation Engine
+## 🚀 What's New in v0.0.6: Stability, Graph & Isolation Engine
 
-The **v0.1.6 release** introduces core architecture enhancements designed for multi-window stability, zero-lag async execution, and automated AI orientation:
+The **v0.0.6 release** introduces core architecture enhancements designed for multi-window stability, zero-lag async execution, and automated AI orientation:
 
 1. **🔒 Strict Workspace Isolation (`src/core/workspace.ts`)**
    - Strictly scopes `remem_ledger.sqlite` and the `@orama/orama` index to the active workspace path (`vscode.workspace.workspaceFolders[0]`).
@@ -55,7 +55,7 @@ The **v0.1.6 release** introduces core architecture enhancements designed for mu
    - Implements strict guard clauses that immediately bypass change events containing `.antigravityMem`, `.recall_scratchpad.md`, or `.remem_context_feed.md`.
    - Enforces a strict **1200ms debounce** to prevent CPU spikes and eliminate recursive self-triggering save loops.
 
-3. **🗺️ Persistent Knowledge Graph ("Graphify") (`src/context/graph.ts`)**
+3. **🗺️ Persistent Knowledge Graph (`src/context/graph.ts`)**
    - Extracts complete module dependency mappings and exported symbols directly from SQLite `remem_ledger.sqlite`.
    - Compresses the codebase architecture into `.remem_context_feed.md` at the workspace root, updated silently in the background on file saves.
 
@@ -107,7 +107,7 @@ The **v0.1.6 release** introduces core architecture enhancements designed for mu
 - Maintains a workspace scratchpad where AI coding agents track multi-step execution plans, checklists, and working hypotheses across turns.
 - Persisted strictly in `workspaceState` (scoped to individual workspace windows) to prevent state contamination across open projects.
 
-### 6. 🗺️ Persistent Knowledge Graph ("Graphify") & Pre-Boot Directive
+### 6. 🗺️ Persistent Knowledge Graph & Pre-Boot Directive
 - **Topology Extraction:** Directly extracts all workspace module imports, exports, and dependents from SQLite `remem_ledger.sqlite`.
 - **Token-Compressed Architecture Map:** Compresses the graph into `.remem_context_feed.md` in the workspace root, containing node summaries, exported symbols, and a compact dependency adjacency matrix.
 - **Silent Background Updates:** Refreshes automatically in the background on document saves without interrupting active coding.
@@ -297,7 +297,7 @@ Full-codebase RAG embeddings can still generate thousands of tokens of noisy sou
 
 ```
 ReMem/
-├── package.json               # Extension manifest & npm scripts (v0.1.6)
+├── package.json               # Extension manifest & npm scripts (v0.0.6)
 ├── tsconfig.json              # TypeScript compilation config
 ├── esbuild.js                 # Production bundler & WASM asset manager
 ├── README.md                  # SEO-optimized project overview & guide
@@ -310,7 +310,7 @@ ReMem/
     │   └── workspace.ts       # WorkspaceIsolationManager & CWD sandbox enforcement
     ├── context/               # High-Performance Watchers, Knowledge Graph & Pre-Boot
     │   ├── watchers.ts        # Anti-Loop file watcher with 1200ms debounce
-    │   ├── graph.ts           # Persistent Knowledge Graph ("Graphify") engine
+    │   ├── graph.ts           # Persistent Knowledge Graph engine
     │   ├── preboot.ts         # Pre-Boot context provider & chat participant hook
     │   ├── chunker.ts         # Granular AST context chunker for Orama indexing
     │   ├── leanRules.ts       # Decision hierarchy & reuse rules
@@ -330,7 +330,7 @@ ReMem/
     │   ├── prompt.ts          # Interactive post-mortem note dialogs
     │   └── ledger.ts          # Error ledger query & prompt formatter
     ├── task/                  # Spec, Task & Traceability Tracking
-    │   ├── tracker.ts         # SpecTaskTracker (GSD task sync)
+    │   ├── tracker.ts         # SpecTaskTracker (Zero-Fluff task sync)
     │   ├── debt.ts            # TechDebtLedger (TODO/FIXME debt collector)
     │   └── traceability.ts    # LeanTraceabilityTracker & Ripple Effect warnings
     ├── review/                # Local Diff Auditing & Safety
