@@ -38,7 +38,7 @@
     "onCommand:remem.reviewDiff",
     "onCommand:remem.syncTaskProgress",
     "onCommand:remem.logDebt",
-    "onCommand:remem.toggleGsdMode"
+    "onCommand:remem.toggleZeroFluffMode"
   ],
   "contributes": {
     "commands": [
@@ -107,7 +107,7 @@
         "title": "ReMem: Collect Tech Debt Ledger"
       },
       {
-        "command": "remem.toggleGsdMode",
+        "command": "remem.toggleZeroFluffMode",
         "title": "ReMem: Toggle GSD (Get Shit Done) Mode"
       }
     ],
@@ -139,7 +139,7 @@
           "default": 3,
           "description": "Number of conversation turns before untouched files are pruned from active context."
         },
-        "remem.gsdMode": {
+        "remem.ZeroFluffMode": {
           "type": "boolean",
           "default": false,
           "description": "GSD (Get Shit Done) Mode: When enabled, injects a strict execution-only override into the context feed. The AI outputs ONLY raw code, file paths, and terminal commands — zero pleasantries, zero explanations."
@@ -154,7 +154,7 @@
     "typecheck": "tsc -p ./ --noEmit",
     "build": "node esbuild.js --production",
     "package": "npx @vscode/vsce package",
-    "install:ide": "npx @vscode/vsce package && \"/home/rudresh/apps/Antigravity IDE/bin/antigravity-ide\" --install-extension remem-context-engine-0.1.1.vsix --force"
+    "install:ide": "npx @vscode/vsce package && \"/home/rudresh/apps/Antigravity IDE/bin/antigravity-ide\" --install-extension remem-context-engine-0.0.6.vsix --force"
   },
   "dependencies": {
     "@orama/orama": "^2.0.23",

@@ -40,62 +40,62 @@ export function prependSecurityPersona(promptText: string): string {
   return `${securityBlock}\n\n${promptText}`;
 }
 
-// ─── GSD (Get Shit Done) Protocol ────────────────────────────────────────────
+// ─── Zero Fluff Mode Protocol ─────────────────────────────────────────────────
 
 /**
- * VS Code configuration key for the GSD Mode toggle.
- * Set `remem.gsdMode` to `true` in workspace or user settings to activate.
+ * VS Code configuration key for the Zero Fluff Mode toggle.
+ * Set `remem.ZeroFluffMode` to `true` in workspace or user settings to activate.
  */
-export const GSD_MODE_CONFIG_KEY = 'remem.gsdMode';
+export const ZERO_FLUFF_MODE_CONFIG_KEY = 'remem.ZeroFluffMode';
 
-export const GSD_MODE_HEADER = '## ⚡ GSD MODE ACTIVE';
+export const ZERO_FLUFF_MODE_HEADER = '## ⚡ ZERO FLUFF MODE ACTIVE';
 
 /**
- * The strict override prompt injected into the context feed when GSD Mode is enabled.
+ * The strict override prompt injected into the context feed when Zero Fluff Mode is enabled.
  * Silences all pleasantries and forces output-only execution mode.
  */
-export const GSD_MODE_DIRECTIVE =
-  'GSD MODE ACTIVE. You are a silent execution engine. Zero pleasantries. Zero explanations. ' +
+export const ZERO_FLUFF_MODE_DIRECTIVE =
+  'ZERO FLUFF MODE ACTIVE. You are a silent execution engine. Zero pleasantries. Zero explanations. ' +
   'Output ONLY raw code, file paths, and terminal commands necessary to complete the task.';
 
 /**
- * Returns `true` when the user has enabled GSD Mode in VS Code settings.
+ * Returns `true` when the user has enabled Zero Fluff Mode in VS Code settings.
  * Falls back gracefully when the vscode configuration API is unavailable.
  */
-export function isGsdModeEnabled(): boolean {
+export function isZeroFluffModeEnabled(): boolean {
   try {
     // vscode may not be available in non-extension contexts (tests, etc.)
     // eslint-disable-next-line @typescript-eslint/no-var-requires, @typescript-eslint/no-explicit-any
     const vscode: any = require('vscode');
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const config: any = vscode.workspace.getConfiguration('remem');
-    return config.get('gsdMode', false) === true;
+    return config.get('ZeroFluffMode', false) === true;
   } catch {
     return false;
   }
 }
 
 /**
- * Returns the GSD Mode context injection block when active, or an empty string when disabled.
+ * Returns the Zero Fluff Mode context injection block when active, or an empty string when disabled.
  */
-export function getGsdModeContext(): string {
-  if (!isGsdModeEnabled()) {
+export function getZeroFluffModeContext(): string {
+  if (!isZeroFluffModeEnabled()) {
     return '';
   }
-  return [GSD_MODE_HEADER, `> ${GSD_MODE_DIRECTIVE}`].join('\n');
+  return [ZERO_FLUFF_MODE_HEADER, `> ${ZERO_FLUFF_MODE_DIRECTIVE}`].join('\n');
 }
 
 /**
- * Prepends the GSD Mode directive to a prompt when GSD Mode is enabled.
+ * Prepends the Zero Fluff Mode directive to a prompt when Zero Fluff Mode is enabled.
  * When disabled this is a no-op and returns `promptText` unchanged.
  */
-export function applyGsdMode(promptText: string): string {
-  const gsdBlock = getGsdModeContext();
-  if (!gsdBlock) {
+export function applyZeroFluffMode(promptText: string): string {
+  const zeroFluffBlock = getZeroFluffModeContext();
+  if (!zeroFluffBlock) {
     return promptText;
   }
   if (!promptText || promptText.trim().length === 0) {
-    return gsdBlock;
+    return zeroFluffBlock;
   }
-  return `${gsdBlock}\n\n${promptText}`;
+  return `${zeroFluffBlock}\n\n${promptText}`;
 }

@@ -105,7 +105,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand('remem.reviewDiff', () => handleReviewDiffCommand()),
     vscode.commands.registerCommand('remem.syncTaskProgress', () => handleSyncTaskProgressCommand()),
     vscode.commands.registerCommand('remem.logDebt', () => handleLogDebtCommand()),
-    vscode.commands.registerCommand('remem.toggleGsdMode', () => handleToggleGsdModeCommand())
+    vscode.commands.registerCommand('remem.toggleZeroFluffMode', () => handleToggleZeroFluffModeCommand())
   );
 
   const workspaceFolders = vscode.workspace.workspaceFolders;
@@ -206,14 +206,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
     astChunker = new ASTContextChunker();
     traceabilityTracker = new LeanTraceabilityTracker(workspaceRoot, dbManager, astAnalyzer);
-    traceabilityTracker.scanWorkspace(150).catch(() => {});
+    traceabilityTracker.scanWorkspace(150).catch(() => { });
 
     // ── Persistent Knowledge Graph ("Graphify") & Pre-Boot Context Provider ─
     graphEngine = new KnowledgeGraphEngine(workspaceRoot, dbManager, astAnalyzer);
     preBootProvider = new PreBootContextProvider(workspaceRoot, graphEngine, dbManager);
     preBootProvider.registerChatParticipant(context);
     // Generate initial persistent architecture map silently in background
-    graphEngine.updateContextFeedSilently().catch(() => {});
+    graphEngine.updateContextFeedSilently().catch(() => { });
 
     // ── Anti-Loop File Watcher (strict 1200ms debounce & internal file filters)
     setupAntiLoopFileWatcher(context, dbManager, pipeline, outputChannel, traceabilityTracker, graphEngine);
@@ -228,7 +228,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       outputChannel?.appendLine(`[ReMem Indexer Error] Background indexing failed: ${err}`);
     });
 
-    // ── Spec & Task Sync Engine (GSD Pattern) ───────────────────────────────
+    // ── Spec & Task Sync Engine (Zero Fluff Mode Pattern) ────────────────────
     taskTracker = new SpecTaskTracker(workspaceRoot, scratchpad, outputChannel);
     await taskTracker.syncProgress(false);
 
@@ -244,7 +244,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         const docPath = doc.uri.fsPath;
         const fileName = path.basename(docPath).toLowerCase();
         if (fileName.endsWith('.md') || !shouldIgnorePath(docPath)) {
-          taskTracker.syncProgress(false).catch(() => {});
+          taskTracker.syncProgress(false).catch(() => { });
         }
       }
     });
@@ -845,22 +845,22 @@ async function openOrCreateScratchpad(): Promise<void> {
 }
 
 /**
- * Toggles the GSD (Get Shit Done) Mode setting in the workspace configuration.
- * When GSD Mode is active the context feed is stripped to raw code, paths, and
+ * Toggles the Zero Fluff Mode setting in the workspace configuration.
+ * When Zero Fluff Mode is active the context feed is stripped to raw code, paths, and
  * terminal commands only — no pleasantries, no explanations.
  */
-async function handleToggleGsdModeCommand(): Promise<void> {
+async function handleToggleZeroFluffModeCommand(): Promise<void> {
   const config = vscode.workspace.getConfiguration('remem');
-  const current = config.get<boolean>('gsdMode', false);
-  await config.update('gsdMode', !current, vscode.ConfigurationTarget.Workspace);
+  const current = config.get<boolean>('ZeroFluffMode', false);
+  await config.update('ZeroFluffMode', !current, vscode.ConfigurationTarget.Workspace);
   if (!current) {
     vscode.window.showInformationMessage(
-      '⚡ ReMem GSD Mode ACTIVATED — Context feed is now execution-only. Zero pleasantries.'
+      '⚡ ReMem Zero Fluff Mode ACTIVATED — Context feed is now execution-only. Zero pleasantries.'
     );
-    outputChannel?.appendLine('[ReMem GSD] GSD Mode activated.');
+    outputChannel?.appendLine('[ReMem] Zero Fluff Mode activated.');
   } else {
-    vscode.window.showInformationMessage('ReMem GSD Mode deactivated — Normal context mode restored.');
-    outputChannel?.appendLine('[ReMem GSD] GSD Mode deactivated.');
+    vscode.window.showInformationMessage('ReMem Zero Fluff Mode deactivated — Normal context mode restored.');
+    outputChannel?.appendLine('[ReMem] Zero Fluff Mode deactivated.');
   }
 }
 
@@ -944,7 +944,7 @@ async function purgeMemory(workspaceRoot: string, context: vscode.ExtensionConte
     await context.workspaceState.update(SCRATCHPAD_STATE_KEY, undefined);
 
     if (graphEngine) {
-      await graphEngine.updateContextFeedSilently().catch(() => {});
+      await graphEngine.updateContextFeedSilently().catch(() => { });
     }
 
     if (scratchpad) {

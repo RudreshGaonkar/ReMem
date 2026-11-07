@@ -9,4 +9,19 @@ esbuild.js
 *.md
 !README.md
 node_modules/**
+# Exclude all sourcemaps
 out/**/*.map
+# Exclude stale tsc-compiled subdirectory files — only the esbuild bundle is needed
+out/ast/**
+out/database/**
+out/git/**
+out/summarizer/**
+out/task/**
+out/context/**
+out/core/**
+out/review/**
+out/types/**
+out/vault/**
+out/config.js
+# Exclude any leftover .vsix files from the workspace root
+*.vsix

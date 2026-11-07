@@ -10,7 +10,7 @@ const SYNC_START = '<!-- REMEM_SYNCED_SPEC_START -->';
 const SYNC_END = '<!-- REMEM_SYNCED_SPEC_END -->';
 
 /**
- * Spec & Task Sync Engine (GSD Pattern)
+ * Spec & Task Sync Engine (Zero Fluff Mode Pattern)
  * Discovers spec and progress markdown files, extracts phase checklists,
  * syncs active build state into .recall_scratchpad.md, and locks AI context to the current milestone.
  */
