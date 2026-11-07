@@ -56,14 +56,20 @@ export class PreBootContextProvider {
 
     try {
       if (fs.existsSync(feedPath)) {
-        return await fs.promises.readFile(feedPath, 'utf8');
+        const content = await fs.promises.readFile(feedPath, 'utf8');
+        if (content && content.trim().length > 0) {
+          return content;
+        }
       }
     } catch {
       // Fall through to generation
     }
 
     if (this.graphEngine) {
-      return await this.graphEngine.updateContextFeedSilently();
+      const generated = await this.graphEngine.updateContextFeedSilently();
+      if (generated && generated.trim().length > 0) {
+        return generated;
+      }
     }
 
     return '# Project Architecture Map not yet generated. Trigger ReMem Re-index.';
@@ -80,19 +86,47 @@ export class PreBootContextProvider {
         const participant = (vscode as any).chat.createChatParticipant(
           'remem',
           async (
-            _request: any,
+            request: any,
             _chatContext: any,
             responseStream: any,
-            _token: vscode.CancellationToken
+            token: vscode.CancellationToken
           ) => {
             const preboot = await this.getPreBootSystemPrompt();
+
+            // If user asked a specific question in chat, answer using available LM
+            if (request?.prompt && request.prompt.trim().length > 0) {
+              try {
+                const models = await (vscode as any).lm?.selectChatModels?.();
+                if (models && models.length > 0) {
+                  const model = models[0];
+                  const prompt = `${preboot}\n\nUser Question:\n${request.prompt}`;
+                  const messages = [(vscode as any).LanguageModelChatMessage.User(prompt)];
+                  const chatResponse = await model.sendRequest(messages, {}, token);
+                  for await (const fragment of chatResponse.text) {
+                    responseStream.markdown(fragment);
+                  }
+                  return { metadata: { prebootContext: preboot } };
+                }
+              } catch {
+                // Fall back to streaming preboot overview
+              }
+            }
+
+            // Default output: show confirmation and pre-boot architecture map
             responseStream.markdown(`*(ReMem Knowledge Graph & Architecture Map Pre-Boot Active)*\n\n`);
-            // Response stream hook for AI participants
+            responseStream.markdown(preboot);
             return { metadata: { prebootContext: preboot } };
           }
         );
 
-        participant.iconPath = vscode.Uri.file(path.join(this.workspaceRoot, 'icon.png'));
+        const iconFile = fs.existsSync(path.join(this.workspaceRoot, 'icon.png'))
+          ? path.join(this.workspaceRoot, 'icon.png')
+          : (typeof context.asAbsolutePath === 'function' ? context.asAbsolutePath('icon.png') : undefined);
+
+        if (iconFile && fs.existsSync(iconFile)) {
+          participant.iconPath = vscode.Uri.file(iconFile);
+        }
+
         context.subscriptions.push(participant);
         return participant;
       }

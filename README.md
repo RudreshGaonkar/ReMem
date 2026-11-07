@@ -2,17 +2,19 @@
 
 # 🧠 ReMem — Local AI Memory & Token Optimization Context Engine
 
-**Supercharge AI coding assistants with local RAG, AST blast radius tracking, Git rollback memory, and 95%+ prompt token reduction.**
+**Supercharge AI coding assistants with local RAG, persistent knowledge graphs, AST blast radius tracking, strict workspace isolation, and 95%+ prompt token reduction.**
 
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.6-3178C6.svg?style=for-the-badge&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
-[![VS Code Extension](https://img.shields.io/badge/VS%20Code-Extension-007ACC.svg?style=for-the-badge&logo=visualstudiocode&logoColor=white)](https://marketplace.visualstudio.com/)
+[![VS Code Extension](https://img.shields.io/badge/VS%20Code-Extension%20v0.1.6-007ACC.svg?style=for-the-badge&logo=visualstudiocode&logoColor=white)](https://marketplace.visualstudio.com/)
 [![SQLite WASM](https://img.shields.io/badge/SQLite-WebAssembly-003B57.svg?style=for-the-badge&logo=sqlite&logoColor=white)](https://sql.js.org/)
 [![Orama Vector](https://img.shields.io/badge/Orama-Embedded%20Search-FF6600.svg?style=for-the-badge)](https://oramasearch.com/)
+[![Worker Threads](https://img.shields.io/badge/Node.js-Worker%20Threads%20Async-339933.svg?style=for-the-badge&logo=nodedotjs&logoColor=white)](https://nodejs.org/api/worker_threads.html)
 [![Security](https://img.shields.io/badge/AES--256--GCM-Encrypted%20Vault-green.svg?style=for-the-badge)](https://nodejs.org/api/crypto.html)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge)](LICENSE)
 
 <p align="center">
   <a href="#-key-features">Features</a> •
+  <a href="#-whats-new-in-v016-stability-graph--isolation-engine">What's New in v0.1.6</a> •
   <a href="#-how-it-works-architecture">Architecture</a> •
   <a href="#-quick-start--installation">Quick Start</a> •
   <a href="#-token-optimization-benchmark">Benchmarks</a> •
@@ -28,15 +30,41 @@
 
 **ReMem (Recall & Memory)** is a developer-first, zero-cloud context engine and state manager built for **VS Code** and **Antigravity IDE**. It acts as an intelligent local **Retrieval-Augmented Generation (RAG) middleman** between your codebase and AI coding agents (such as Antigravity, GitHub Copilot, Cursor, and Claude Code).
 
-By mapping the codebase incrementally, generating 1–2 sentence structural summaries, tracking Git rollbacks with post-mortem notes, and encrypting environment secrets with AES-256-GCM, ReMem **reduces prompt token consumption by up to 99%** and permanently eliminates AI context amnesia.
+By mapping the codebase incrementally, generating 1–2 sentence structural summaries, building a persistent knowledge graph (`.remem_context_feed.md`), tracking Git rollbacks with post-mortem notes, and encrypting environment secrets with AES-256-GCM, ReMem **reduces prompt token consumption by up to 99%** and permanently eliminates AI context amnesia and wasteful filesystem scans.
 
 ```
 +-----------------------------------------------------------------------------------+
 |  Without ReMem: Raw 500-line files dumped into prompt  --> 15,000+ tokens / turn  |
-|  With ReMem:    AST Blast Radius + Error Ledger + RAG  --> ~250 tokens / turn     |
+|  With ReMem:    Knowledge Graph + AST Radius + RAG     --> ~250 tokens / turn     |
 |                                                            (98.3% Token Savings)  |
 +-----------------------------------------------------------------------------------+
 ```
+
+---
+
+## 🚀 What's New in v0.1.6: Stability, Graph & Isolation Engine
+
+The **v0.1.6 release** introduces core architecture enhancements designed for multi-window stability, zero-lag async execution, and automated AI orientation:
+
+1. **🔒 Strict Workspace Isolation (`src/core/workspace.ts`)**
+   - Strictly scopes `remem_ledger.sqlite` and the `@orama/orama` index to the active workspace path (`vscode.workspace.workspaceFolders[0]`).
+   - Completely removes `globalState` persistence across windows to eliminate context bleeding between simultaneous projects.
+   - Enforces the active workspace root as the mandatory, sandboxed working directory (`cwd`) for all AI terminal commands and process executions.
+
+2. **⚡ Anti-Loop File Watcher (`src/context/watchers.ts`)**
+   - Implements strict guard clauses that immediately bypass change events containing `.antigravityMem`, `.recall_scratchpad.md`, or `.remem_context_feed.md`.
+   - Enforces a strict **1200ms debounce** to prevent CPU spikes and eliminate recursive self-triggering save loops.
+
+3. **🗺️ Persistent Knowledge Graph ("Graphify") (`src/context/graph.ts`)**
+   - Extracts complete module dependency mappings and exported symbols directly from SQLite `remem_ledger.sqlite`.
+   - Compresses the codebase architecture into `.remem_context_feed.md` at the workspace root, updated silently in the background on file saves.
+
+4. **🤖 Pre-Boot Context Provider (`src/context/preboot.ts`)**
+   - Injects `.remem_context_feed.md` directly into the AI system prompt the moment a new chat session boots.
+   - Enforces the prompt directive: *"You have received the project architecture map. Do not run commands to scan or analyze the workspace files. Rely strictly on this map and the local Orama search."*
+
+5. **🧵 Async Execution & UI Unblocking (`src/ast/asyncParser.ts`)**
+   - Offloads AST parsing and tree-sitter chunking entirely into Node.js `worker_threads` (with non-blocking macro-task promise slicing fallback) so the main VS Code UI thread never hitches.
 
 ---
 
@@ -45,9 +73,11 @@ By mapping the codebase incrementally, generating 1–2 sentence structural summ
 | Problem in Modern AI Coding | What Happens Without ReMem | How ReMem Solves It |
 |---|---|---|
 | **🚨 Context Window Exhaustion** | Large codebases exceed LLM context windows (8k/32k/128k), forcing truncation. | **Hierarchical Summarization:** Compresses source files into 15–30 token structural summaries with SHA-256 caching. |
+| **🔍 Wasteful AI File Scans** | AI coding agents execute slow `find`, `grep`, and `cat` commands across the workspace to orient themselves. | **Pre-Boot Knowledge Graph (`.remem_context_feed.md`):** Instant topology and exports delivered upfront with an explicit directive barring file scans. |
+| **🪟 Cross-Window Context Bleed** | Opening multiple projects in VS Code causes scratchpads and state to contaminate other windows. | **Strict Workspace Isolation:** Scopes SQLite, Orama, and state strictly to `workspaceFolders[0]` via `workspaceState`. |
 | **🔁 Context Amnesia & Repeated Bugs** | When a developer reverts a broken commit or branch, the AI repeats the exact same mistake. | **Git Error Ledger:** Watches `.git/HEAD` and prompts for post-mortem warnings, prepending them to future AI prompts. |
 | **🔓 Plaintext Secrets Exposure** | AI prompts ingest `.env`, `*.pem`, and `secrets.json` in plaintext. | **Secure Secrets Vault:** Encrypts sensitive files using AES-256-GCM with 100k-iteration PBKDF2 & 1-hour in-memory cache. |
-| **💥 Blind Multi-File Edits** | AI refactors a function without knowing which other files break. | **AST Blast Radius:** Uses `web-tree-sitter` to compute cross-file import/export dependencies instantly without compilation. |
+| **💥 UI Thread Freezes During Parsing** | Parsing large codebases with tree-sitter locks the main IDE event loop. | **Worker Threads Async Engine:** Offloads parsing to background Node.js worker threads. |
 
 ---
 
@@ -75,6 +105,27 @@ By mapping the codebase incrementally, generating 1–2 sentence structural summ
 
 ### 5. 📝 Active Scratchpad (`.recall_scratchpad.md`)
 - Maintains a workspace scratchpad where AI coding agents track multi-step execution plans, checklists, and working hypotheses across turns.
+- Persisted strictly in `workspaceState` (scoped to individual workspace windows) to prevent state contamination across open projects.
+
+### 6. 🗺️ Persistent Knowledge Graph ("Graphify") & Pre-Boot Directive
+- **Topology Extraction:** Directly extracts all workspace module imports, exports, and dependents from SQLite `remem_ledger.sqlite`.
+- **Token-Compressed Architecture Map:** Compresses the graph into `.remem_context_feed.md` in the workspace root, containing node summaries, exported symbols, and a compact dependency adjacency matrix.
+- **Silent Background Updates:** Refreshes automatically in the background on document saves without interrupting active coding.
+- **Pre-Boot System Prompt Injection:** Automatically delivers the architecture map to AI sessions at chat boot, accompanied by a strict directive:
+  > *"You have received the project architecture map. Do not run commands to scan or analyze the workspace files. Rely strictly on this map and the local Orama search."*
+
+### 7. 🔒 Strict Multi-Window Workspace Isolation & Sandboxing
+- **Workspace-Folder Scoping:** Automatically scopes SQLite ledgers, Orama vector indexes, and scratchpads to the active folder (`vscode.workspace.workspaceFolders[0]`).
+- **Path Sandboxing:** Strictly verifies file reads and writes with `WorkspaceIsolationManager`, blocking any path traversal or out-of-sandbox access (`WorkspaceIsolationError`).
+- **Enforced Execution CWD:** Mandates the active workspace root as the absolute `cwd` for all terminal executions and child process spawns.
+
+### 8. ⚡ Anti-Loop File Watcher with 1200ms Debounce
+- **Self-Trigger Protection:** Strict guard clauses instantly drop change events for internal files (`.antigravityMem`, `.recall_scratchpad.md`, `.remem_context_feed.md`).
+- **1200ms Save Debounce:** Throttles save events per file, eliminating CPU spikes and infinite save loops while keeping memory records in continuous sync.
+
+### 9. 🧵 Async AST Execution via Worker Threads
+- **Zero UI Starvation:** Offloads heavy tree-sitter AST queries, import/export parsing, and token chunking into background Node.js `worker_threads`.
+- **Non-blocking Slicing Fallback:** Gracefully falls back to macro-task promise slicing (`setImmediate`) to keep VS Code's UI thread completely unblocked.
 
 ---
 
@@ -246,7 +297,7 @@ Full-codebase RAG embeddings can still generate thousands of tokens of noisy sou
 
 ```
 ReMem/
-├── package.json               # Extension manifest & npm scripts
+├── package.json               # Extension manifest & npm scripts (v0.1.6)
 ├── tsconfig.json              # TypeScript compilation config
 ├── esbuild.js                 # Production bundler & WASM asset manager
 ├── README.md                  # SEO-optimized project overview & guide
@@ -254,7 +305,16 @@ ReMem/
 ├── LICENSE                    # MIT License
 └── src/
     ├── config.ts              # Constants & file path resolvers
-    ├── extension.ts           # Extension entry point (activate/deactivate)
+    ├── extension.ts           # Extension entry point & lifecycle coordinator
+    ├── core/                  # Strict Workspace Isolation & Sandboxing
+    │   └── workspace.ts       # WorkspaceIsolationManager & CWD sandbox enforcement
+    ├── context/               # High-Performance Watchers, Knowledge Graph & Pre-Boot
+    │   ├── watchers.ts        # Anti-Loop file watcher with 1200ms debounce
+    │   ├── graph.ts           # Persistent Knowledge Graph ("Graphify") engine
+    │   ├── preboot.ts         # Pre-Boot context provider & chat participant hook
+    │   ├── chunker.ts         # Granular AST context chunker for Orama indexing
+    │   ├── leanRules.ts       # Decision hierarchy & reuse rules
+    │   └── security.ts        # Zero-trust AppSec persona injection
     ├── types/                 # Shared TypeScript domain interfaces
     ├── database/              # SQLite WASM & Orama Vector storage
     │   ├── sqlite.ts          # sql.js in-memory SQLite with corruption recovery
@@ -263,21 +323,29 @@ ReMem/
     ├── summarizer/            # File watcher & structural summarizer
     │   ├── hasher.ts          # SHA-256 content hashing & token estimation
     │   ├── pipeline.ts        # 1-2 sentence structural summarizer
-    │   ├── watcher.ts         # onDidSaveTextDocument file listeners
+    │   ├── watcher.ts         # Git sync triggers & backward-compatible exports
     │   └── indexer.ts         # Background workspace indexer & directory tree
     ├── git/                   # Git rollback watcher & Error Ledger
     │   ├── watcher.ts         # .git/HEAD kernel-level file watcher (read-only)
     │   ├── prompt.ts          # Interactive post-mortem note dialogs
     │   └── ledger.ts          # Error ledger query & prompt formatter
+    ├── task/                  # Spec, Task & Traceability Tracking
+    │   ├── tracker.ts         # SpecTaskTracker (GSD task sync)
+    │   ├── debt.ts            # TechDebtLedger (TODO/FIXME debt collector)
+    │   └── traceability.ts    # LeanTraceabilityTracker & Ripple Effect warnings
+    ├── review/                # Local Diff Auditing & Safety
+    │   ├── auditor.ts         # LocalDiffAuditor (Git diff & AST verification)
+    │   └── overbuild.ts       # Overbuild detection and spec verification
     ├── vault/                 # AES-256-GCM Secrets Vault
     │   ├── crypto.ts          # AES-256-GCM + 100k PBKDF2 encryption/decryption
     │   ├── storage.ts         # .antigravityMem/vault.enc manager
     │   ├── session.ts         # 1-hour in-memory cache with auto-expiration
     │   └── ui.ts              # Password prompt & vault decryption workflow
     └── ast/                   # AST Blast Radius, Scratchpad, & Context Injector
-        ├── analyzer.ts        # Dependency graph & blast radius analyzer
+        ├── analyzer.ts        # Async dependency graph & blast radius analyzer
+        ├── asyncParser.ts     # Worker threads async tree-sitter AST parser
         ├── scratchpad.ts      # .recall_scratchpad.md plan manager
-        └── injector.ts        # assembleContext() & LRU context manager
+        └── injector.ts        # assembleContext() & Pre-Boot context injection
 ```
 
 ---

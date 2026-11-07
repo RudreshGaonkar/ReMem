@@ -21,6 +21,7 @@
   "main": "./out/extension.js",
   "activationEvents": [
     "onStartupFinished",
+    "onChatParticipant:remem",
     "onCommand:remem.status",
     "onCommand:remem.showScratchpad",
     "onCommand:remem.searchSummaries",
@@ -103,6 +104,15 @@
       {
         "command": "remem.logDebt",
         "title": "ReMem: Collect Tech Debt Ledger"
+      }
+    ],
+    "chatParticipants": [
+      {
+        "id": "remem",
+        "name": "remem",
+        "fullName": "ReMem Context Engine",
+        "description": "AI memory, token optimization, and persistent knowledge graph",
+        "isSticky": true
       }
     ],
     "configuration": {
