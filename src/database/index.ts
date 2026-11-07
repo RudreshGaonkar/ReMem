@@ -198,6 +198,20 @@ export class DatabaseManager {
     return this.sqlite.getErrorNotesForBranch(branch);
   }
 
+  /**
+   * Retrieves all recorded file dependencies across the workspace from SQLite.
+   */
+  public getAllDependencies(): { sourceFile: string; importedFile: string; importStatement?: string }[] {
+    return this.sqliteLedger ? this.sqliteLedger.getAllDependencies() : [];
+  }
+
+  /**
+   * Retrieves all recorded file exports across the workspace from SQLite.
+   */
+  public getAllExports(): { filePath: string; symbol: string; kind?: string }[] {
+    return this.sqliteLedger ? this.sqliteLedger.getAllExports() : [];
+  }
+
   // ─── Stats & persistence ───────────────────────────────────────────────────
 
   /**

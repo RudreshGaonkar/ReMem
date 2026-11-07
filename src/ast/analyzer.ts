@@ -3,6 +3,7 @@ import * as path from 'path';
 import Parser from 'web-tree-sitter';
 import { ASTBlastRadius } from '../types/index.js';
 import { shouldIgnorePath } from '../config.js';
+import { AsyncASTParser } from './asyncParser.js';
 
 /**
  * ASTAnalyzer parses source files, extracts imports and exports, and calculates the blast radius.
@@ -111,24 +112,27 @@ export class ASTAnalyzer {
   }
 
   /**
-   * Scans and builds the in-memory dependency graph for the entire workspace.
+   * Scans and builds the in-memory dependency graph for the entire workspace
+   * completely asynchronously without blocking the VS Code main IDE thread.
    */
   public async buildDependencyGraph(workspaceRoot: string): Promise<void> {
     this.importMap.clear();
     this.reverseDependencyMap.clear();
     this.exportMap.clear();
 
-    const scanDirectory = (dir: string) => {
+    const fileList: string[] = [];
+
+    const collectFilesAsync = async (dir: string): Promise<void> => {
       try {
-        const items = fs.readdirSync(dir, { withFileTypes: true });
-        for (const item of items) {
-          const fullPath = path.join(dir, item.name);
+        const entries = await fs.promises.readdir(dir, { withFileTypes: true });
+        for (const entry of entries) {
+          const fullPath = path.join(dir, entry.name);
           if (shouldIgnorePath(fullPath)) continue;
 
-          if (item.isDirectory()) {
-            scanDirectory(fullPath);
-          } else if (item.isFile()) {
-            this.processFileDependencies(fullPath);
+          if (entry.isDirectory()) {
+            await collectFilesAsync(fullPath);
+          } else if (entry.isFile()) {
+            fileList.push(fullPath);
           }
         }
       } catch {
@@ -136,11 +140,51 @@ export class ASTAnalyzer {
       }
     };
 
-    scanDirectory(workspaceRoot);
+    await collectFilesAsync(workspaceRoot);
+
+    // Process files in non-blocking slices of 10 to keep the IDE thread responsive
+    const BATCH_SIZE = 10;
+    for (let i = 0; i < fileList.length; i += BATCH_SIZE) {
+      const batch = fileList.slice(i, i + BATCH_SIZE);
+      await Promise.all(batch.map((filePath) => this.processFileDependenciesAsync(filePath)));
+      // Yield to the event loop between batches
+      await new Promise((resolve) => setImmediate(resolve));
+    }
   }
 
   /**
-   * Processes dependencies for a single file and updates maps.
+   * Asynchronously processes dependencies for a file using worker_threads / non-blocking parsing.
+   */
+  public async processFileDependenciesAsync(filePath: string): Promise<void> {
+    try {
+      const content = await fs.promises.readFile(filePath, 'utf8');
+      const parser = AsyncASTParser.getInstance();
+      const relativePath = path.basename(filePath);
+      const parsed = await parser.parseAsync(filePath, relativePath, content);
+
+      this.exportMap.set(filePath, new Set(parsed.exports));
+
+      const resolvedImports = new Set<string>();
+      for (const rawImport of parsed.imports) {
+        const resolved = this.resolveImportPath(filePath, rawImport);
+        if (resolved) {
+          resolvedImports.add(resolved);
+
+          if (!this.reverseDependencyMap.has(resolved)) {
+            this.reverseDependencyMap.set(resolved, new Set());
+          }
+          this.reverseDependencyMap.get(resolved)!.add(filePath);
+        }
+      }
+
+      this.importMap.set(filePath, resolvedImports);
+    } catch {
+      // Ignore binary or unreadable files
+    }
+  }
+
+  /**
+   * Processes dependencies for a single file and updates maps synchronously (fallback).
    */
   public processFileDependencies(filePath: string): void {
     try {

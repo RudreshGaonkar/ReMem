@@ -8,6 +8,8 @@ import { getLeanRulesContext } from '../context/leanRules.js';
 import { getZeroTrustSecurityPersonaContext } from '../context/security.js';
 import { ASTContextChunker } from '../context/chunker.js';
 import { LeanTraceabilityTracker } from '../task/traceability.js';
+import { PreBootContextProvider } from '../context/preboot.js';
+import { KnowledgeGraphEngine } from '../context/graph.js';
 
 export interface AssembleContextOptions {
   activeFilePath?: string;
@@ -18,6 +20,9 @@ export interface AssembleContextOptions {
   specTaskContext?: string;
   includeLeanRules?: boolean;
   includeSecurityPersona?: boolean;
+  includePreBootContext?: boolean;
+  preBootProvider?: PreBootContextProvider;
+  graphEngine?: KnowledgeGraphEngine;
   astChunker?: ASTContextChunker;
   traceabilityTracker?: LeanTraceabilityTracker;
 }
@@ -77,6 +82,24 @@ export async function assembleContext(
   const sections: string[] = [];
 
   sections.push('# 🧠 REMEM TOKEN-OPTIMIZED CONTEXT INJECTION');
+
+  // Pre-Boot Context Provider: Persistent Knowledge Graph Architecture Map
+  if (options.includePreBootContext !== false) {
+    const preboot =
+      options.preBootProvider ||
+      new PreBootContextProvider(
+        scratchpad.rootPath,
+        options.graphEngine || new KnowledgeGraphEngine(scratchpad.rootPath, dbManager, astAnalyzer)
+      );
+    try {
+      const prebootBlock = await preboot.getPreBootSystemPrompt();
+      if (prebootBlock) {
+        sections.push(`\n${prebootBlock}`);
+      }
+    } catch {
+      // Non-blocking fallback
+    }
+  }
 
   // 1. Permanent Zero-Trust AppSec Engineer Persona (Pre-generation OWASP defense)
   if (options.includeSecurityPersona !== false) {

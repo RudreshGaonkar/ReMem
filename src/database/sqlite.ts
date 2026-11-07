@@ -491,6 +491,56 @@ export class SqliteLedger {
   }
 
   /**
+   * Returns all recorded dependencies across the workspace.
+   */
+  public getAllDependencies(): { sourceFile: string; importedFile: string; importStatement?: string }[] {
+    if (!this.db) {
+      return [];
+    }
+
+    const dependencies: { sourceFile: string; importedFile: string; importStatement?: string }[] = [];
+    const stmt = this.db.prepare(`
+      SELECT sourceFile, importedFile, importStatement FROM file_dependencies ORDER BY sourceFile ASC
+    `);
+
+    while (stmt.step()) {
+      const row = stmt.getAsObject();
+      dependencies.push({
+        sourceFile: row.sourceFile as string,
+        importedFile: row.importedFile as string,
+        importStatement: (row.importStatement as string) || undefined,
+      });
+    }
+    stmt.free();
+    return dependencies;
+  }
+
+  /**
+   * Returns all recorded exported symbols across the workspace.
+   */
+  public getAllExports(): { filePath: string; symbol: string; kind?: string }[] {
+    if (!this.db) {
+      return [];
+    }
+
+    const exports: { filePath: string; symbol: string; kind?: string }[] = [];
+    const stmt = this.db.prepare(`
+      SELECT filePath, symbol, kind FROM file_exports ORDER BY filePath ASC
+    `);
+
+    while (stmt.step()) {
+      const row = stmt.getAsObject();
+      exports.push({
+        filePath: row.filePath as string,
+        symbol: row.symbol as string,
+        kind: (row.kind as string) || undefined,
+      });
+    }
+    stmt.free();
+    return exports;
+  }
+
+  /**
    * Clears dependency records for a file (e.g. when deleted).
    */
   public clearDependenciesForFile(filePath: string): void {

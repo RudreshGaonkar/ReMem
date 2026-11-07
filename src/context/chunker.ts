@@ -3,6 +3,7 @@ import * as path from 'path';
 import Parser from 'web-tree-sitter';
 import { ASTChunk } from '../types/index.js';
 import { VectorSearchEngine } from '../database/vector.js';
+import { AsyncASTParser } from '../ast/asyncParser.js';
 
 let isParserInitialized = false;
 
@@ -252,6 +253,22 @@ export class ASTContextChunker {
   /**
    * Indexes extracted AST chunks into Orama vector search engine.
    */
+  /**
+   * Asynchronously extracts AST code chunks off the main thread via worker_threads.
+   */
+  public async extractChunksAsync(filePath: string, relativePath: string, content: string): Promise<ASTChunk[]> {
+    try {
+      const parser = AsyncASTParser.getInstance();
+      const result = await parser.parseAsync(filePath, relativePath, content);
+      if (result.chunks && result.chunks.length > 0) {
+        return result.chunks;
+      }
+    } catch {
+      // Fallback to sync extraction
+    }
+    return this.extractChunks(filePath, relativePath, content);
+  }
+
   public async indexFileChunks(
     filePath: string,
     relativePath: string,
@@ -261,7 +278,7 @@ export class ASTContextChunker {
     // Remove previous chunks for this file
     await vectorEngine.removeChunksForFile(filePath);
 
-    const chunks = this.extractChunks(filePath, relativePath, content);
+    const chunks = await this.extractChunksAsync(filePath, relativePath, content);
     await vectorEngine.indexChunks(chunks);
 
     return chunks;

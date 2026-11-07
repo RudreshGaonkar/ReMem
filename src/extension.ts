@@ -7,7 +7,7 @@ import { GitStateWatcher } from './git/watcher.js';
 import { getFormattedErrorContext } from './git/ledger.js';
 import { promptForPostMortem } from './git/prompt.js';
 import { SummarizerPipeline } from './summarizer/pipeline.js';
-import { setupFileWatcher } from './summarizer/watcher.js';
+import { setupAntiLoopFileWatcher } from './context/watchers.js';
 import { generateDirectoryTree, indexWorkspace } from './summarizer/indexer.js';
 import { VaultStorage } from './vault/storage.js';
 import { VaultSessionManager } from './vault/session.js';
@@ -21,10 +21,15 @@ import { SpecTaskTracker } from './task/tracker.js';
 import { TechDebtLedger } from './task/debt.js';
 import { ASTContextChunker } from './context/chunker.js';
 import { LeanTraceabilityTracker } from './task/traceability.js';
+import { WorkspaceIsolationManager } from './core/workspace.js';
+import { KnowledgeGraphEngine } from './context/graph.js';
+import { PreBootContextProvider } from './context/preboot.js';
+import { AsyncASTParser } from './ast/asyncParser.js';
 
-// ─── Module-level singletons ──────────────────────────────────────────────────
+// ─── Module-level singletons (scoped per extension host activation) ──────────
 
 let outputChannel: vscode.OutputChannel | undefined;
+let workspaceIsolation: WorkspaceIsolationManager | null = null;
 let dbManager: DatabaseManager | null = null;
 let pipeline: SummarizerPipeline | null = null;
 let gitWatcher: GitStateWatcher | null = null;
@@ -37,6 +42,8 @@ let taskTracker: SpecTaskTracker | null = null;
 let techDebtLedger: TechDebtLedger | null = null;
 let astChunker: ASTContextChunker | null = null;
 let traceabilityTracker: LeanTraceabilityTracker | null = null;
+let graphEngine: KnowledgeGraphEngine | null = null;
+let preBootProvider: PreBootContextProvider | null = null;
 
 /** StatusBar item showing ReMem state with a toggle/sync click handler. */
 let statusBarItem: vscode.StatusBarItem | undefined;
@@ -44,7 +51,7 @@ let statusBarItem: vscode.StatusBarItem | undefined;
 /** When `false` the engine is paused: file-save summarization is disabled. */
 let isEngineActive: boolean = true;
 
-/** globalState key used to persist the scratchpad content across IDE restarts. */
+/** workspaceState key used to persist scratchpad content strictly within this workspace (prevents multi-window bleed). */
 const SCRATCHPAD_STATE_KEY = 'remem.scratchpadContent';
 
 // ─── Activation ──────────────────────────────────────────────────────────────
@@ -109,6 +116,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const workspaceRoot = workspaceFolders[0].uri.fsPath;
   outputChannel.appendLine(`[ReMem] Workspace Root: ${workspaceRoot}`);
 
+  // ── Strict Workspace Isolation & Sandboxing ──────────────────────────────
+  workspaceIsolation = new WorkspaceIsolationManager(context, workspaceRoot);
+
   // ── StatusBar item (created early so it is visible even if init takes time) ─
   statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
   statusBarItem.command = 'remem.toggleSync';
@@ -119,13 +129,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // Initialize the local .antigravityMem directory
   ensureMemoryDirectory(workspaceRoot);
 
-  // Initialize unified DatabaseManager (SQLite + Orama)
+  // Initialize unified DatabaseManager (SQLite + Orama) scoped strictly to workspace
   try {
     dbManager = new DatabaseManager();
-    await dbManager.initialize(workspaceRoot);
+    await dbManager.initialize(workspaceIsolation.workspaceRoot);
     pipeline = new SummarizerPipeline(dbManager);
 
-    outputChannel.appendLine(`[ReMem Database] SQLite ledger and Orama vector search initialized.`);
+    outputChannel.appendLine(`[ReMem Database] SQLite ledger and Orama vector search initialized for workspace.`);
 
     // ── Session recovery ────────────────────────────────────────────────────
     await performSessionRecovery(context, workspaceRoot);
@@ -136,17 +146,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     pipeline.setVault(vaultStorage, vaultSession);
     outputChannel.appendLine(`[ReMem Vault] Secure Secrets Vault initialized (backed by native SecretStorage).`);
 
-    // ── Scratchpad Manager (.recall_scratchpad.md) ──────────────────────────
+    // ── Scratchpad Manager (.recall_scratchpad.md) (Workspace-Scoped State) ─
     scratchpad = new ScratchpadManager(workspaceRoot);
-    const persistedContent = context.globalState.get<string>(SCRATCHPAD_STATE_KEY);
+    const persistedContent = context.workspaceState.get<string>(SCRATCHPAD_STATE_KEY);
     const wasRestored = scratchpad.restoreState(persistedContent);
     outputChannel.appendLine(
       wasRestored
-        ? `[ReMem Scratchpad] Scratchpad state restored from previous session.`
+        ? `[ReMem Scratchpad] Scratchpad state restored from workspace session.`
         : `[ReMem Scratchpad] Scratchpad initialized with default template.`
     );
 
-    // ── AST Dependency Analyzer & Context Chunker ──────────────────────────
+    // ── AST Dependency Analyzer & Context Chunker (Async / Worker Threads) ──
     astAnalyzer = new ASTAnalyzer();
     await astAnalyzer.initialize();
     astAnalyzer.buildDependencyGraph(workspaceRoot).catch((err) => {
@@ -157,8 +167,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     traceabilityTracker = new LeanTraceabilityTracker(workspaceRoot, dbManager, astAnalyzer);
     traceabilityTracker.scanWorkspace(150).catch(() => {});
 
-    // ── File watcher (on-save summarization) ───────────────────────────────
-    setupFileWatcher(context, dbManager, pipeline, outputChannel, traceabilityTracker);
+    // ── Persistent Knowledge Graph ("Graphify") & Pre-Boot Context Provider ─
+    graphEngine = new KnowledgeGraphEngine(workspaceRoot, dbManager, astAnalyzer);
+    preBootProvider = new PreBootContextProvider(workspaceRoot, graphEngine);
+    preBootProvider.registerChatParticipant(context);
+
+    // Generate initial persistent architecture map silently in background
+    graphEngine.updateContextFeedSilently().catch(() => {});
+
+    // ── Anti-Loop File Watcher (strict 1200ms debounce & internal file filters)
+    setupAntiLoopFileWatcher(context, dbManager, pipeline, outputChannel, traceabilityTracker, graphEngine);
 
     // ── Git State Watcher ──────────────────────────────────────────────────
     gitWatcher = new GitStateWatcher(workspaceRoot, dbManager, outputChannel);
@@ -192,11 +210,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     });
     context.subscriptions.push(taskSaveWatcher);
 
-    // ── Periodically persist scratchpad to globalState ─────────────────────
+    // ── Periodically persist scratchpad to workspaceState (no cross-window bleed)
     const scratchpadPersistTimer = setInterval(() => {
       if (scratchpad) {
         const content = scratchpad.getPlan();
-        context.globalState.update(SCRATCHPAD_STATE_KEY, content);
+        context.workspaceState.update(SCRATCHPAD_STATE_KEY, content);
       }
     }, 60_000); // every 60 seconds
     context.subscriptions.push({ dispose: () => clearInterval(scratchpadPersistTimer) });
@@ -240,6 +258,11 @@ export async function deactivate(): Promise<void> {
   taskTracker = null;
   astChunker = null;
   traceabilityTracker = null;
+  graphEngine = null;
+  preBootProvider = null;
+  workspaceIsolation = null;
+
+  AsyncASTParser.getInstance().dispose();
 
   if (statusBarItem) {
     statusBarItem.dispose();
@@ -460,6 +483,8 @@ async function handleGetContextCommand(): Promise<void> {
     taskTracker: taskTracker || undefined,
     astChunker: astChunker || undefined,
     traceabilityTracker: traceabilityTracker || undefined,
+    graphEngine: graphEngine || undefined,
+    preBootProvider: preBootProvider || undefined,
   });
 
   // Copy to clipboard
@@ -820,8 +845,12 @@ async function purgeMemory(workspaceRoot: string, context: vscode.ExtensionConte
       diffAuditor = new LocalDiffAuditor(workspaceRoot, dbManager, astAnalyzer, scratchpad, outputChannel);
     }
 
-    // Also clear the persisted scratchpad content from globalState
-    await context.globalState.update(SCRATCHPAD_STATE_KEY, undefined);
+    // Also clear the persisted scratchpad content from workspaceState (isolated per window)
+    await context.workspaceState.update(SCRATCHPAD_STATE_KEY, undefined);
+
+    if (graphEngine) {
+      await graphEngine.updateContextFeedSilently().catch(() => {});
+    }
 
     if (scratchpad) {
       scratchpad.clearPlan();

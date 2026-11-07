@@ -3,6 +3,7 @@ out/
 dist/
 .antigravityMem/
 .recall_scratchpad.md
+.remem_context_feed.md
 *.vsix
 .vscode-test/
 .DS_Store
