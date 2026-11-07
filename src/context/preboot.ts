@@ -3,6 +3,7 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import { KnowledgeGraphEngine } from './graph.js';
 import { WorkspaceIsolationManager } from '../core/workspace.js';
+import { DatabaseManager } from '../database/index.js';
 
 export const PREBOOT_AI_INSTRUCTION =
   'You have received the project architecture map. Do not run commands to scan or analyze the workspace files. Rely strictly on this map and the local Orama search.';
@@ -24,14 +25,24 @@ Only after writing this plan are you allowed to output the actual code.
 export class PreBootContextProvider {
   private workspaceRoot: string;
   private graphEngine?: KnowledgeGraphEngine;
+  private dbManager?: DatabaseManager;
 
-  constructor(workspaceRoot: string, graphEngine?: KnowledgeGraphEngine) {
+  constructor(workspaceRoot: string, graphEngine?: KnowledgeGraphEngine, dbManager?: DatabaseManager) {
     this.workspaceRoot = workspaceRoot;
     this.graphEngine = graphEngine;
+    this.dbManager = dbManager;
+  }
+
+  /**
+   * Wires in a DatabaseManager instance so session state can be injected into pre-boot context.
+   */
+  public setDatabaseManager(db: DatabaseManager): void {
+    this.dbManager = db;
   }
 
   /**
    * Generates the complete pre-boot system prompt context injection block.
+   * Includes a RESUME STATE block when an active session is found in SQLite.
    */
   public async getPreBootSystemPrompt(): Promise<string> {
     const feedContent = await this.loadContextFeed();
@@ -42,9 +53,102 @@ export class PreBootContextProvider {
     sections.push('');
     sections.push(CHAIN_OF_THOUGHT_RULE);
     sections.push('');
+
+    // ── Universal Session Resume Block ───────────────────────────────────────
+    const resumeBlock = this.buildResumeStateBlock();
+    if (resumeBlock) {
+      sections.push(resumeBlock);
+      sections.push('');
+    }
+
     sections.push(feedContent.trim());
 
     return sections.join('\n');
+  }
+
+  /**
+   * Reads the last persisted session state from SQLite and returns a formatted
+   * `## 🔄 RESUME STATE` markdown block, or `null` if no active session exists.
+   */
+  public buildResumeStateBlock(): string | null {
+    if (!this.dbManager) {
+      return null;
+    }
+
+    let sessionState: ReturnType<DatabaseManager['getCurrentSessionState']>;
+    try {
+      sessionState = this.dbManager.getCurrentSessionState();
+    } catch {
+      return null;
+    }
+
+    if (!sessionState) {
+      return null;
+    }
+
+    const { activeTask, completedTasks, pendingTasks, lastPlanSnapshot, activeFilePath, timestamp } = sessionState;
+
+    // Only inject a resume block when there is genuine work-in-progress
+    if (!activeTask && pendingTasks.length === 0 && !lastPlanSnapshot) {
+      return null;
+    }
+
+    const ago = this.humanRelativeTime(timestamp);
+    const lines: string[] = [
+      '## 🔄 RESUME STATE',
+      `> **Session interrupted ${ago}.** You are picking up an in-progress task — do NOT start from scratch.`,
+      '',
+    ];
+
+    if (activeTask) {
+      lines.push(`- **Was Working On:** ${activeTask}`);
+    }
+
+    if (activeFilePath) {
+      lines.push(`- **Active File at Interruption:** \`${activeFilePath}\``);
+    }
+
+    if (completedTasks.length > 0) {
+      lines.push(`- **Completed Steps (${completedTasks.length}):**`);
+      for (const task of completedTasks.slice(-5)) {
+        lines.push(`  - [x] ${task}`);
+      }
+    }
+
+    if (pendingTasks.length > 0) {
+      lines.push(`- **Remaining Steps (${pendingTasks.length}):**`);
+      for (const task of pendingTasks.slice(0, 5)) {
+        lines.push(`  - [ ] ${task}`);
+      }
+    }
+
+    if (lastPlanSnapshot && lastPlanSnapshot.trim().length > 0) {
+      lines.push('');
+      lines.push('### Last Plan Snapshot');
+      lines.push('```');
+      lines.push(lastPlanSnapshot.slice(0, 800)); // Cap to prevent token bloat
+      if (lastPlanSnapshot.length > 800) {
+        lines.push('... [snapshot truncated]');
+      }
+      lines.push('```');
+    }
+
+    return lines.join('\n');
+  }
+
+  /**
+   * Returns a human-readable relative time string (e.g. "5 minutes ago").
+   */
+  private humanRelativeTime(timestamp: number): string {
+    const diffMs = Date.now() - timestamp;
+    const diffSeconds = Math.floor(diffMs / 1000);
+    if (diffSeconds < 60) return `${diffSeconds}s ago`;
+    const diffMinutes = Math.floor(diffSeconds / 60);
+    if (diffMinutes < 60) return `${diffMinutes}m ago`;
+    const diffHours = Math.floor(diffMinutes / 60);
+    if (diffHours < 24) return `${diffHours}h ago`;
+    const diffDays = Math.floor(diffHours / 24);
+    return `${diffDays}d ago`;
   }
 
   /**

@@ -104,7 +104,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand('remem.toggleSync', () => handleToggleSyncCommand()),
     vscode.commands.registerCommand('remem.reviewDiff', () => handleReviewDiffCommand()),
     vscode.commands.registerCommand('remem.syncTaskProgress', () => handleSyncTaskProgressCommand()),
-    vscode.commands.registerCommand('remem.logDebt', () => handleLogDebtCommand())
+    vscode.commands.registerCommand('remem.logDebt', () => handleLogDebtCommand()),
+    vscode.commands.registerCommand('remem.toggleGsdMode', () => handleToggleGsdModeCommand())
   );
 
   const workspaceFolders = vscode.workspace.workspaceFolders;
@@ -156,6 +157,46 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         : `[ReMem Scratchpad] Scratchpad initialized with default template.`
     );
 
+    // ── Universal Session State: persist task progress to SQLite on every ──
+    // scratchpad write, enabling cross-model resume via the RESUME STATE block.
+    scratchpad.onContentChange((newContent: string) => {
+      if (!dbManager) return;
+      try {
+        // Parse completed / pending tasks from the markdown checklist in scratchpad
+        const lines = newContent.split(/\r?\n/);
+        const completedTasks: string[] = [];
+        const pendingTasks: string[] = [];
+        let activeTask: string | undefined;
+
+        for (const line of lines) {
+          const doneMatch = line.match(/^\s*[-*+]\s+\[[xX]\]\s+(.+)$/);
+          if (doneMatch) {
+            completedTasks.push(doneMatch[1].trim());
+            continue;
+          }
+          const pendingMatch = line.match(/^\s*[-*+]\s+\[\s*\]\s+(.+)$/);
+          if (pendingMatch) {
+            const taskText = pendingMatch[1].trim();
+            pendingTasks.push(taskText);
+            if (!activeTask) {
+              activeTask = taskText; // First pending item is the active task
+            }
+          }
+        }
+
+        dbManager.saveSessionState({
+          activeTask,
+          completedTasks,
+          pendingTasks,
+          lastPlanSnapshot: newContent.slice(0, 1200),
+          activeFilePath: vscode.window.activeTextEditor?.document.uri.fsPath,
+          timestamp: Date.now(),
+        });
+      } catch {
+        // Non-fatal: session state persistence failure should never crash the extension
+      }
+    });
+
     // ── AST Dependency Analyzer & Context Chunker (Async / Worker Threads) ──
     astAnalyzer = new ASTAnalyzer();
     await astAnalyzer.initialize();
@@ -169,9 +210,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
     // ── Persistent Knowledge Graph ("Graphify") & Pre-Boot Context Provider ─
     graphEngine = new KnowledgeGraphEngine(workspaceRoot, dbManager, astAnalyzer);
-    preBootProvider = new PreBootContextProvider(workspaceRoot, graphEngine);
+    preBootProvider = new PreBootContextProvider(workspaceRoot, graphEngine, dbManager);
     preBootProvider.registerChatParticipant(context);
-
     // Generate initial persistent architecture map silently in background
     graphEngine.updateContextFeedSilently().catch(() => {});
 
@@ -805,6 +845,26 @@ async function openOrCreateScratchpad(): Promise<void> {
 }
 
 /**
+ * Toggles the GSD (Get Shit Done) Mode setting in the workspace configuration.
+ * When GSD Mode is active the context feed is stripped to raw code, paths, and
+ * terminal commands only — no pleasantries, no explanations.
+ */
+async function handleToggleGsdModeCommand(): Promise<void> {
+  const config = vscode.workspace.getConfiguration('remem');
+  const current = config.get<boolean>('gsdMode', false);
+  await config.update('gsdMode', !current, vscode.ConfigurationTarget.Workspace);
+  if (!current) {
+    vscode.window.showInformationMessage(
+      '⚡ ReMem GSD Mode ACTIVATED — Context feed is now execution-only. Zero pleasantries.'
+    );
+    outputChannel?.appendLine('[ReMem GSD] GSD Mode activated.');
+  } else {
+    vscode.window.showInformationMessage('ReMem GSD Mode deactivated — Normal context mode restored.');
+    outputChannel?.appendLine('[ReMem GSD] GSD Mode deactivated.');
+  }
+}
+
+/**
  * Purges the local .antigravityMem cache and rebuilds database structures.
  */
 async function purgeMemory(workspaceRoot: string, context: vscode.ExtensionContext): Promise<void> {
@@ -843,6 +903,41 @@ async function purgeMemory(workspaceRoot: string, context: vscode.ExtensionConte
     if (astAnalyzer && scratchpad) {
       taskTracker = new SpecTaskTracker(workspaceRoot, scratchpad, outputChannel);
       diffAuditor = new LocalDiffAuditor(workspaceRoot, dbManager, astAnalyzer, scratchpad, outputChannel);
+    }
+
+    // Re-wire the scratchpad → SQLite session state callback to the new dbManager
+    // (The old callback's closure reference was nulled out above, so we need a fresh one)
+    if (scratchpad) {
+      scratchpad.onContentChange((newContent: string) => {
+        if (!dbManager) return;
+        try {
+          const lines = newContent.split(/\r?\n/);
+          const completedTasks: string[] = [];
+          const pendingTasks: string[] = [];
+          let activeTask: string | undefined;
+          for (const line of lines) {
+            const doneMatch = line.match(/^\s*[-*+]\s+\[[xX]\]\s+(.+)$/);
+            if (doneMatch) { completedTasks.push(doneMatch[1].trim()); continue; }
+            const pendingMatch = line.match(/^\s*[-*+]\s+\[\s*\]\s+(.+)$/);
+            if (pendingMatch) {
+              const taskText = pendingMatch[1].trim();
+              pendingTasks.push(taskText);
+              if (!activeTask) { activeTask = taskText; }
+            }
+          }
+          dbManager.saveSessionState({
+            activeTask, completedTasks, pendingTasks,
+            lastPlanSnapshot: newContent.slice(0, 1200),
+            activeFilePath: vscode.window.activeTextEditor?.document.uri.fsPath,
+            timestamp: Date.now(),
+          });
+        } catch { /* non-fatal */ }
+      });
+    }
+
+    // Update preBootProvider with the fresh dbManager after purge
+    if (preBootProvider) {
+      preBootProvider.setDatabaseManager(dbManager);
     }
 
     // Also clear the persisted scratchpad content from workspaceState (isolated per window)

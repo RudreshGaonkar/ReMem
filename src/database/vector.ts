@@ -1,6 +1,10 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { ASTChunk } from '../types/index.js';
+import { SecretShield } from '../core/ignore.js';
+
+export const ORAMA_BATCH_SIZE = 500;
+export const MAX_RAM_BUDGET_BYTES = 100 * 1024 * 1024; // 100MB RAM Expansion limit
 
 export interface OramaSummaryDoc {
   id?: string;
@@ -113,6 +117,11 @@ export class VectorSearchEngine {
       throw new Error('Vector index is not initialized.');
     }
 
+    // Bulletproof Secret Shield: Never index ignored or sensitive secret files
+    if (SecretShield.getInstance().isIgnored(doc.filePath)) {
+      return;
+    }
+
     const { insert } = await getOramaModule();
 
     // Remove previous version if indexed
@@ -160,6 +169,11 @@ export class VectorSearchEngine {
       throw new Error('Vector index is not initialized.');
     }
 
+    // Bulletproof Secret Shield: Never index chunks from ignored or sensitive secret files
+    if (SecretShield.getInstance().isIgnored(chunk.filePath)) {
+      return;
+    }
+
     const { insert, remove } = await getOramaModule();
 
     // Remove old chunk instance if already mapped
@@ -193,11 +207,61 @@ export class VectorSearchEngine {
   }
 
   /**
-   * Indexes multiple AST chunks in batch.
+   * Indexes multiple AST chunks in batch using @orama/orama insertMultiple
+   * tuned for high throughput with up to 100MB RAM budget.
    */
   public async indexChunks(chunks: ASTChunk[]): Promise<void> {
-    for (const chunk of chunks) {
-      await this.indexChunk(chunk);
+    if (!this.orama || chunks.length === 0) {
+      return;
+    }
+
+    // Filter out ignored / sensitive files before indexing
+    const validChunks = chunks.filter((c) => !SecretShield.getInstance().isIgnored(c.filePath));
+    if (validChunks.length === 0) {
+      return;
+    }
+
+    const { insertMultiple, remove } = await getOramaModule();
+
+    // Remove old chunk mappings
+    for (const chunk of validChunks) {
+      const existingInternalId = this.chunkIdMap.get(chunk.id);
+      if (existingInternalId) {
+        try {
+          await remove(this.orama, existingInternalId);
+        } catch {
+          // ignore
+        }
+        this.chunkIdMap.delete(chunk.id);
+      }
+    }
+
+    // Batch insert up to ORAMA_BATCH_SIZE (500 chunks) per batch
+    for (let i = 0; i < validChunks.length; i += ORAMA_BATCH_SIZE) {
+      const batch = validChunks.slice(i, i + ORAMA_BATCH_SIZE);
+      const docs = batch.map((chunk) => ({
+        filePath: chunk.filePath,
+        relativePath: chunk.relativePath,
+        chunkId: chunk.id,
+        name: chunk.name,
+        kind: chunk.kind,
+        signature: chunk.signature || chunk.name,
+        summary: `${chunk.kind} ${chunk.name}: ${chunk.signature}`,
+        content: chunk.content,
+      }));
+
+      const ids: string[] = await insertMultiple(this.orama, docs);
+      for (let j = 0; j < batch.length; j++) {
+        const chunk = batch[j];
+        const id = ids[j];
+        if (id) {
+          this.chunkIdMap.set(chunk.id, id);
+          if (!this.fileChunksMap.has(chunk.filePath)) {
+            this.fileChunksMap.set(chunk.filePath, new Set());
+          }
+          this.fileChunksMap.get(chunk.filePath)!.add(chunk.id);
+        }
+      }
     }
   }
 

@@ -212,6 +212,47 @@ export class DatabaseManager {
     return this.sqliteLedger ? this.sqliteLedger.getAllExports() : [];
   }
 
+  // ─── Universal Session State (Cross-Model Resume) ──────────────────────────
+
+  /**
+   * Persists the active session state and plan progress to SQLite.
+   */
+  public saveSessionState(state: {
+    activeTask?: string;
+    completedTasks?: string[];
+    pendingTasks?: string[];
+    lastPlanSnapshot: string;
+    activeFilePath?: string;
+    timestamp?: number;
+  }): void {
+    if (this.sqliteLedger) {
+      this.sqliteLedger.saveSessionState(state);
+    }
+  }
+
+  /**
+   * Retrieves the current session state from SQLite.
+   */
+  public getCurrentSessionState(): {
+    activeTask?: string;
+    completedTasks: string[];
+    pendingTasks: string[];
+    lastPlanSnapshot: string;
+    activeFilePath?: string;
+    timestamp: number;
+  } | null {
+    return this.sqliteLedger ? this.sqliteLedger.getCurrentSessionState() : null;
+  }
+
+  /**
+   * Clears the persisted session state from SQLite.
+   */
+  public clearSessionState(): void {
+    if (this.sqliteLedger) {
+      this.sqliteLedger.clearSessionState();
+    }
+  }
+
   // ─── Stats & persistence ───────────────────────────────────────────────────
 
   /**

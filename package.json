@@ -2,7 +2,7 @@
   "name": "remem-context-engine",
   "displayName": "ReMem: AI Memory & Token Optimization Engine",
   "description": "Local RAG middleman, state manager, and token optimization engine for AI coding agents.",
-  "version": "0.1.6",
+  "version": "0.0.6",
   "icon": "icon.png",
   "publisher": "RudreshGaonkar",
   "license": "MIT",
@@ -37,7 +37,8 @@
     "onCommand:remem.toggleSync",
     "onCommand:remem.reviewDiff",
     "onCommand:remem.syncTaskProgress",
-    "onCommand:remem.logDebt"
+    "onCommand:remem.logDebt",
+    "onCommand:remem.toggleGsdMode"
   ],
   "contributes": {
     "commands": [
@@ -104,6 +105,10 @@
       {
         "command": "remem.logDebt",
         "title": "ReMem: Collect Tech Debt Ledger"
+      },
+      {
+        "command": "remem.toggleGsdMode",
+        "title": "ReMem: Toggle GSD (Get Shit Done) Mode"
       }
     ],
     "chatParticipants": [
@@ -133,6 +138,11 @@
           "type": "number",
           "default": 3,
           "description": "Number of conversation turns before untouched files are pruned from active context."
+        },
+        "remem.gsdMode": {
+          "type": "boolean",
+          "default": false,
+          "description": "GSD (Get Shit Done) Mode: When enabled, injects a strict execution-only override into the context feed. The AI outputs ONLY raw code, file paths, and terminal commands — zero pleasantries, zero explanations."
         }
       }
     }
@@ -148,6 +158,7 @@
   },
   "dependencies": {
     "@orama/orama": "^2.0.23",
+    "ignore": "^7.0.14",
     "simple-git": "^3.27.0",
     "sql.js": "^1.12.0",
     "web-tree-sitter": "^0.24.4"

@@ -363,11 +363,11 @@ export class GitStateWatcher {
       clearTimeout(this.remoteSyncDebounce);
       this.remoteSyncDebounce = null;
     }
-    if (this.gitStateWatcher) {
+    if (this.gitStateWatcher && typeof this.gitStateWatcher.dispose === 'function') {
       this.gitStateWatcher.dispose();
       this.gitStateWatcher = null;
     }
-    if (this.remoteSyncWatcher) {
+    if (this.remoteSyncWatcher && typeof this.remoteSyncWatcher.dispose === 'function') {
       this.remoteSyncWatcher.dispose();
       this.remoteSyncWatcher = null;
     }

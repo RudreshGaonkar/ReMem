@@ -1,4 +1,5 @@
 import * as path from 'path';
+import { SecretShield } from './core/ignore.js';
 
 export const CONFIG = {
   // Folder & File Names
@@ -49,8 +50,13 @@ export function getScratchpadPath(workspaceRoot: string): string {
 
 /**
  * Checks if a given file path should be ignored by the engine.
+ * Passes the path through the compiled SecretShield ignore instance (.gitignore + secret blocklist).
  */
 export function shouldIgnorePath(filePath: string): boolean {
+  if (SecretShield.getInstance().isIgnored(filePath)) {
+    return true;
+  }
+
   const ignoredPatterns = [
     /[\\/]\.git([\\/]|$)/i,
     /[\\/]node_modules([\\/]|$)/i,
@@ -60,6 +66,7 @@ export function shouldIgnorePath(filePath: string): boolean {
     /[\\/]\.vscode-test([\\/]|$)/i,
     /[\\/]\.DS_Store$/i,
     /[\\/]\.recall_scratchpad\.md$/i,
+    /[\\/]\.remem_context_feed\.md$/i,
   ];
 
   return ignoredPatterns.some((pattern) => pattern.test(filePath));

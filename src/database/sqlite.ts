@@ -115,6 +115,19 @@ export class SqliteLedger {
       );
       CREATE INDEX IF NOT EXISTS idx_exp_file ON file_exports(filePath);
     `);
+
+    // Table: Universal Session State (Cross-Model Resume)
+    this.db.run(`
+      CREATE TABLE IF NOT EXISTS current_session_state (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        activeTask TEXT,
+        completedTasks TEXT,
+        pendingTasks TEXT,
+        lastPlanSnapshot TEXT,
+        activeFilePath TEXT,
+        timestamp INTEGER NOT NULL
+      );
+    `);
   }
 
   /**
@@ -549,6 +562,104 @@ export class SqliteLedger {
     }
     this.db.run(`DELETE FROM file_dependencies WHERE sourceFile = ? OR importedFile = ?`, [filePath, filePath]);
     this.db.run(`DELETE FROM file_exports WHERE filePath = ?`, [filePath]);
+  }
+
+  /**
+   * Persists the current session state into SQLite for cross-model resumption.
+   */
+  public saveSessionState(state: {
+    activeTask?: string;
+    completedTasks?: string[];
+    pendingTasks?: string[];
+    lastPlanSnapshot: string;
+    activeFilePath?: string;
+    timestamp?: number;
+  }): void {
+    if (!this.db) {
+      throw new Error('Database is not initialized.');
+    }
+
+    const now = state.timestamp || Date.now();
+    const completedJson = JSON.stringify(state.completedTasks || []);
+    const pendingJson = JSON.stringify(state.pendingTasks || []);
+
+    const stmt = this.db.prepare(`
+      INSERT OR REPLACE INTO current_session_state (id, activeTask, completedTasks, pendingTasks, lastPlanSnapshot, activeFilePath, timestamp)
+      VALUES (1, ?, ?, ?, ?, ?, ?)
+    `);
+
+    stmt.run([
+      state.activeTask || null,
+      completedJson,
+      pendingJson,
+      state.lastPlanSnapshot,
+      state.activeFilePath || null,
+      now,
+    ]);
+    stmt.free();
+  }
+
+  /**
+   * Retrieves the latest persisted session state from SQLite.
+   */
+  public getCurrentSessionState(): {
+    activeTask?: string;
+    completedTasks: string[];
+    pendingTasks: string[];
+    lastPlanSnapshot: string;
+    activeFilePath?: string;
+    timestamp: number;
+  } | null {
+    if (!this.db) {
+      return null;
+    }
+
+    const stmt = this.db.prepare(`
+      SELECT activeTask, completedTasks, pendingTasks, lastPlanSnapshot, activeFilePath, timestamp
+      FROM current_session_state WHERE id = 1
+    `);
+
+    if (stmt.step()) {
+      const row = stmt.getAsObject();
+      let completedTasks: string[] = [];
+      let pendingTasks: string[] = [];
+
+      try {
+        completedTasks = JSON.parse((row.completedTasks as string) || '[]');
+      } catch {
+        completedTasks = [];
+      }
+
+      try {
+        pendingTasks = JSON.parse((row.pendingTasks as string) || '[]');
+      } catch {
+        pendingTasks = [];
+      }
+
+      const result = {
+        activeTask: (row.activeTask as string) || undefined,
+        completedTasks,
+        pendingTasks,
+        lastPlanSnapshot: (row.lastPlanSnapshot as string) || '',
+        activeFilePath: (row.activeFilePath as string) || undefined,
+        timestamp: Number(row.timestamp) || Date.now(),
+      };
+      stmt.free();
+      return result;
+    }
+
+    stmt.free();
+    return null;
+  }
+
+  /**
+   * Clears the current session state.
+   */
+  public clearSessionState(): void {
+    if (!this.db) {
+      return;
+    }
+    this.db.run(`DELETE FROM current_session_state WHERE id = 1`);
   }
 
   /**

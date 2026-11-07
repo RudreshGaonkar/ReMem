@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { DatabaseManager } from '../database/index.js';
 import { shouldIgnorePath } from '../config.js';
+import { SecretShield } from '../core/ignore.js';
 import { computeFileHash } from '../summarizer/hasher.js';
 import { SummarizerPipeline } from '../summarizer/pipeline.js';
 import type { LeanTraceabilityTracker } from '../task/traceability.js';
@@ -16,6 +17,12 @@ export const WATCHER_DEBOUNCE_MS = 1200;
  */
 export function isLoopInducingOrInternalPath(filePath: string): boolean {
   if (!filePath) return true;
+
+  // Pass through Bulletproof SecretShield (.gitignore + secret blocklist)
+  if (SecretShield.getInstance().isIgnored(filePath)) {
+    return true;
+  }
+
   const p = filePath.replace(/\\/g, '/');
 
   // Strict guard clauses required for ReMem Anti-Loop File Watcher

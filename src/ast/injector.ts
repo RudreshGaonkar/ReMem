@@ -5,7 +5,7 @@ import { ASTAnalyzer } from './analyzer.js';
 import { ScratchpadManager } from './scratchpad.js';
 import { SpecTaskTracker } from '../task/tracker.js';
 import { getLeanRulesContext } from '../context/leanRules.js';
-import { getZeroTrustSecurityPersonaContext } from '../context/security.js';
+import { getZeroTrustSecurityPersonaContext, getGsdModeContext } from '../context/security.js';
 import { ASTContextChunker } from '../context/chunker.js';
 import { LeanTraceabilityTracker } from '../task/traceability.js';
 import { PreBootContextProvider } from '../context/preboot.js';
@@ -82,6 +82,14 @@ export async function assembleContext(
   const sections: string[] = [];
 
   sections.push('# 🧠 REMEM TOKEN-OPTIMIZED CONTEXT INJECTION');
+
+  // ── GSD (Get Shit Done) Protocol ─────────────────────────────────────────
+  // When GSD Mode is enabled this block takes precedence — injected first so
+  // the AI model sees the execution-only directive before any other context.
+  const gsdBlock = getGsdModeContext();
+  if (gsdBlock) {
+    sections.push(`\n${gsdBlock}`);
+  }
 
   // Pre-Boot Context Provider: Persistent Knowledge Graph Architecture Map
   if (options.includePreBootContext !== false) {

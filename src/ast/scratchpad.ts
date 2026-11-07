@@ -12,16 +12,32 @@ export interface ScratchpadSnapshot {
 }
 
 /**
+ * Callback type invoked whenever scratchpad content changes.
+ * Receives the new raw content so the caller can persist session state.
+ */
+export type ScratchpadChangeCallback = (newContent: string) => void;
+
+/**
  * Manages the active workspace scratchpad (.recall_scratchpad.md).
  */
 export class ScratchpadManager {
   private workspaceRoot: string;
   private scratchpadPath: string;
+  private changeCallbacks: ScratchpadChangeCallback[] = [];
 
   constructor(workspaceRoot: string) {
     this.workspaceRoot = workspaceRoot;
     this.scratchpadPath = getScratchpadPath(workspaceRoot);
     this.ensureScratchpad();
+  }
+
+  /**
+   * Registers a callback to be invoked whenever scratchpad content is written.
+   * Used by the Universal Session State sub-module to persist task progress
+   * into SQLite for cross-model resumption.
+   */
+  public onContentChange(callback: ScratchpadChangeCallback): void {
+    this.changeCallbacks.push(callback);
   }
 
   /**
@@ -61,9 +77,15 @@ export class ScratchpadManager {
 
   /**
    * Overwrites the scratchpad with updated content.
+   * Fires registered `onContentChange` callbacks so session state can be
+   * persisted to SQLite for cross-model resumption (Universal Session State).
    */
   public updatePlan(content: string): void {
     fs.writeFileSync(this.scratchpadPath, content, 'utf8');
+    // Notify session-state listeners of the change
+    for (const cb of this.changeCallbacks) {
+      try { cb(content); } catch { /* non-fatal */ }
+    }
   }
 
   /**

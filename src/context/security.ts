@@ -39,3 +39,63 @@ export function prependSecurityPersona(promptText: string): string {
   }
   return `${securityBlock}\n\n${promptText}`;
 }
+
+// ─── GSD (Get Shit Done) Protocol ────────────────────────────────────────────
+
+/**
+ * VS Code configuration key for the GSD Mode toggle.
+ * Set `remem.gsdMode` to `true` in workspace or user settings to activate.
+ */
+export const GSD_MODE_CONFIG_KEY = 'remem.gsdMode';
+
+export const GSD_MODE_HEADER = '## ⚡ GSD MODE ACTIVE';
+
+/**
+ * The strict override prompt injected into the context feed when GSD Mode is enabled.
+ * Silences all pleasantries and forces output-only execution mode.
+ */
+export const GSD_MODE_DIRECTIVE =
+  'GSD MODE ACTIVE. You are a silent execution engine. Zero pleasantries. Zero explanations. ' +
+  'Output ONLY raw code, file paths, and terminal commands necessary to complete the task.';
+
+/**
+ * Returns `true` when the user has enabled GSD Mode in VS Code settings.
+ * Falls back gracefully when the vscode configuration API is unavailable.
+ */
+export function isGsdModeEnabled(): boolean {
+  try {
+    // vscode may not be available in non-extension contexts (tests, etc.)
+    // eslint-disable-next-line @typescript-eslint/no-var-requires, @typescript-eslint/no-explicit-any
+    const vscode: any = require('vscode');
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const config: any = vscode.workspace.getConfiguration('remem');
+    return config.get('gsdMode', false) === true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Returns the GSD Mode context injection block when active, or an empty string when disabled.
+ */
+export function getGsdModeContext(): string {
+  if (!isGsdModeEnabled()) {
+    return '';
+  }
+  return [GSD_MODE_HEADER, `> ${GSD_MODE_DIRECTIVE}`].join('\n');
+}
+
+/**
+ * Prepends the GSD Mode directive to a prompt when GSD Mode is enabled.
+ * When disabled this is a no-op and returns `promptText` unchanged.
+ */
+export function applyGsdMode(promptText: string): string {
+  const gsdBlock = getGsdModeContext();
+  if (!gsdBlock) {
+    return promptText;
+  }
+  if (!promptText || promptText.trim().length === 0) {
+    return gsdBlock;
+  }
+  return `${gsdBlock}\n\n${promptText}`;
+}

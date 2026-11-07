@@ -33,10 +33,21 @@ async function initTreeSitter(): Promise<boolean> {
  * Deconstructs files into individual functions, interfaces, and classes using
  * web-tree-sitter with high-performance structural extraction fallbacks.
  * Enables granular chunk indexing into @orama/orama and ultra-compact AI prompt injection.
+ *
+ * RAM Expansion (v1.0.0): maxChunkLines raised from 45 → 80 and class condensation
+ * threshold lifted from 25 → 40 method signatures per class.  Combined with the
+ * ORAMA_BATCH_SIZE=500 / MAX_RAM_BUDGET_BYTES=100MB constants in vector.ts this
+ * allows the AST worker threads to process significantly larger files without
+ * hitting aggressive GC pauses.
  */
 export class ASTContextChunker {
   private isReady: boolean = false;
-  private maxChunkLines: number = 45; // Token-efficiency cap per chunk
+  /**
+   * Maximum lines kept per chunk before truncation.
+   * Raised to 80 (from 45) to reduce GC pressure on large files and give
+   * the AST worker threads more breathing room within the 100MB RAM budget.
+   */
+  private maxChunkLines: number = 80;
 
   public get isInitialized(): boolean {
     return this.isReady;
@@ -435,7 +446,7 @@ export class ASTContextChunker {
       if (methodRegex.test(line)) {
         condensed.push(line.replace(/\{.*$/, '').trimEnd() + ';');
       }
-      if (condensed.length >= 25) {
+      if (condensed.length >= 40) {
         condensed.push('  // ... [additional methods omitted for token optimization]');
         break;
       }
