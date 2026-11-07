@@ -7,6 +7,14 @@ import { WorkspaceIsolationManager } from '../core/workspace.js';
 export const PREBOOT_AI_INSTRUCTION =
   'You have received the project architecture map. Do not run commands to scan or analyze the workspace files. Rely strictly on this map and the local Orama search.';
 
+export const CHAIN_OF_THOUGHT_RULE = `
+**CRITICAL EXECUTION RULE: PLAN BEFORE YOU CODE**
+You are strictly forbidden from generating any code blocks immediately. 
+Before you write or modify any file, you MUST output a brief <thinking> block. 
+Inside this block, quickly analyze the project architecture map, identify existing utilities you can reuse, and state exactly what lines you need to change. 
+Only after writing this plan are you allowed to output the actual code.
+`.trim();
+
 /**
  * Pre-Boot Context Provider
  *
@@ -31,6 +39,8 @@ export class PreBootContextProvider {
     const sections: string[] = [];
     sections.push('## 🗺️ PRE-BOOT PROJECT ARCHITECTURE MAP (ReMem Graph Engine)');
     sections.push(`> **MANDATORY DIRECTIVE:** ${PREBOOT_AI_INSTRUCTION}`);
+    sections.push('');
+    sections.push(CHAIN_OF_THOUGHT_RULE);
     sections.push('');
     sections.push(feedContent.trim());
 
