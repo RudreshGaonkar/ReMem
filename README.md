@@ -1,6 +1,6 @@
 <div align="center">
 
-# 🧠 ReMem — Local AI Memory & Token Optimization Context Engine
+# ReMem — Local AI Memory & Token Optimization Context Engine
 
 **Local code search, dependency graphs, and session handoff for editor and command-line agents.**
 
@@ -26,7 +26,7 @@
 
 ---
 
-## 📌 Overview: What is ReMem?
+## Overview: What is ReMem?
 
 ReMem indexes a workspace locally and shares summaries, exported symbols, module dependencies, task progress, and post-mortem notes with coding agents. The editor extension and standalone MCP server use the same index and session ledger.
 
@@ -67,67 +67,67 @@ The server provides `remem://context-feed`, `remem://scratchpad`, and `remem://e
 ---
 
 
-## ⚡ The Problems ReMem Solves
+## The Problems ReMem Solves
 
 | Problem in Modern AI Coding | What Happens Without ReMem | How ReMem Solves It |
 |---|---|---|
-| **🚨 Context Window Exhaustion** | Large codebases exceed LLM context windows (8k/32k/128k), forcing truncation. | **Hierarchical Summarization:** Compresses source files into 15–30 token structural summaries with SHA-256 caching. |
-| **🔍 Wasteful AI File Scans** | AI coding agents execute slow `find`, `grep`, and `cat` commands across the workspace to orient themselves. | **Pre-Boot Knowledge Graph (`.remem_context_feed.md`):** Topology and exports provide a starting point for focused source inspection. |
-| **🪟 Cross-Window Context Bleed** | Opening multiple projects in VS Code causes scratchpads and state to contaminate other windows. | **Strict Workspace Isolation:** Scopes SQLite, Orama, and state strictly to `workspaceFolders[0]` via `workspaceState`. |
-| **🔁 Context Amnesia & Repeated Bugs** | When a developer reverts a broken commit or branch, the AI repeats the exact same mistake. | **Git Error Ledger:** Watches `.git/HEAD` and prompts for post-mortem warnings, prepending them to future AI prompts. |
-| **🔓 Plaintext Secrets Exposure** | AI prompts ingest `.env`, `*.pem`, and `secrets.json` in plaintext. | **Secure Secrets Vault:** Encrypts sensitive files using AES-256-GCM with 100k-iteration PBKDF2 & 1-hour in-memory cache. |
-| **💥 UI Thread Freezes During Parsing** | Parsing large codebases with tree-sitter locks the main IDE event loop. | **Worker Threads Async Engine:** Offloads parsing to background Node.js worker threads. |
+| **Context Window Exhaustion** | Large codebases exceed LLM context windows (8k/32k/128k), forcing truncation. | **Hierarchical Summarization:** Compresses source files into 15–30 token structural summaries with SHA-256 caching. |
+| **Wasteful AI File Scans** | AI coding agents execute slow `find`, `grep`, and `cat` commands across the workspace to orient themselves. | **Pre-Boot Knowledge Graph (`.remem_context_feed.md`):** Topology and exports provide a starting point for focused source inspection. |
+| **Cross-Window Context Bleed** | Opening multiple projects in VS Code causes scratchpads and state to contaminate other windows. | **Strict Workspace Isolation:** Scopes SQLite, Orama, and state strictly to `workspaceFolders[0]` via `workspaceState`. |
+| **Context Amnesia & Repeated Bugs** | When a developer reverts a broken commit or branch, the AI repeats the exact same mistake. | **Git Error Ledger:** Watches `.git/HEAD` and prompts for post-mortem warnings, prepending them to future AI prompts. |
+| **Plaintext Secrets Exposure** | AI prompts ingest `.env`, `*.pem`, and `secrets.json` in plaintext. | **Secure Secrets Vault:** Encrypts sensitive files using AES-256-GCM with 100k-iteration PBKDF2 & 1-hour in-memory cache. |
+| **UI Thread Freezes During Parsing** | Parsing large codebases with tree-sitter locks the main IDE event loop. | **Worker Threads Async Engine:** Offloads parsing to background Node.js worker threads. |
 
 ---
 
-## ✨ Key Features
+## Key Features
 
-### 1. 📉 Hierarchical Token-Efficient Summarization
+### 1. Hierarchical Token-Efficient Summarization
 - **Global Overview:** Generates a 100-word holistic snapshot of your repository stored in local SQLite.
 - **Visual Directory Tree:** Generates a fast, serialized structural hierarchy.
 - **1–2 Sentence File Summaries:** On `onDidSaveTextDocument`, parses classes, functions, and exports into condensed summaries (~15–30 tokens instead of 2,000+ raw file tokens).
 - **Microsecond SHA-256 Gating:** Bypasses processing if the file content hash has not changed, eliminating redundant computations.
 
-### 2. 🛡️ Git Branch & Rollback "Error Ledger"
+### 2. Git Branch & Rollback "Error Ledger"
 - **Zero-Polling Watcher:** Listens to kernel-level OS file events on `.git/HEAD` and `.git/refs/**` (zero CPU/battery waste).
 - **Post-Mortem Note Capture:** When switching branches or reverting commits, ReMem prompts: *"Why was this feature reverted?"*
 - **Mistake Prevention:** Automatically prepends past error warnings to the AI prompt whenever working on that file or branch again.
 
-### 3. 🔐 Secure Secrets Vault (AES-256-GCM + PBKDF2)
+### 3. Secure Secrets Vault (AES-256-GCM + PBKDF2)
 - **Automatic Detection:** Identifies `.env`, `.env.local`, `*.pem`, `*.key`, and `secrets.json`.
 - **Authenticated Encryption:** Encrypts sensitive context at rest in `.antigravityMem/vault.json` using `AES-256-GCM` with 100,000-iteration PBKDF2 key derivation.
 - **In-Memory Session Cache:** Master password is cached strictly in RAM and automatically wiped after **1 hour** or upon IDE shutdown.
 
-### 4. 💥 AST Blast Radius & Dependency Analyzer
+### 4. AST Blast Radius & Dependency Analyzer
 - **Fast AST Parsing:** Uses `web-tree-sitter` to parse import/export declarations without heavy compiler toolchains.
 - **Blast Radius Detection:** Editing `auth.ts` instantly reveals dependent modules (`middleware.ts`, `server.ts`) so the AI understands ripple effects without full-codebase grepping.
 
-### 5. 📝 Active Scratchpad (`.recall_scratchpad.md`)
+### 5. Active Scratchpad (`.recall_scratchpad.md`)
 - Maintains a workspace scratchpad where AI coding agents track multi-step execution plans, checklists, and working hypotheses across turns.
 - Persisted strictly in `workspaceState` (scoped to individual workspace windows) to prevent state contamination across open projects.
 
-### 6. 🗺️ Persistent Knowledge Graph & Pre-Boot Directive
+### 6. Persistent Knowledge Graph & Pre-Boot Directive
 - **Topology Extraction:** Directly extracts all workspace module imports, exports, and dependents from SQLite `remem_ledger.sqlite`.
 - **Token-Compressed Architecture Map:** Compresses the graph into `.remem_context_feed.md` in the workspace root, containing node summaries, exported symbols, and a compact dependency adjacency matrix.
 - **Silent Background Updates:** Refreshes automatically in the background on document saves without interrupting active coding.
 - **Pre-Boot Context:** The optional chat participant assembles context directly. Other agents can follow the workspace instruction pointers or request context through MCP.
 
-### 7. 🔒 Strict Multi-Window Workspace Isolation & Sandboxing
+### 7. Strict Multi-Window Workspace Isolation & Sandboxing
 - **Workspace-Folder Scoping:** Automatically scopes SQLite ledgers, Orama vector indexes, and scratchpads to the active folder (`vscode.workspace.workspaceFolders[0]`).
 - **Path Sandboxing:** Strictly verifies file reads and writes with `WorkspaceIsolationManager`, blocking any path traversal or out-of-sandbox access (`WorkspaceIsolationError`).
 - **Enforced Execution CWD:** Mandates the active workspace root as the absolute `cwd` for all terminal executions and child process spawns.
 
-### 8. ⚡ Anti-Loop File Watcher with 1200ms Debounce
+### 8. Anti-Loop File Watcher with 1200ms Debounce
 - **Self-Trigger Protection:** Strict guard clauses instantly drop change events for internal files (`.antigravityMem`, `.recall_scratchpad.md`, `.remem_context_feed.md`).
 - **1200ms Save Debounce:** Throttles save events per file, eliminating CPU spikes and infinite save loops while keeping memory records in continuous sync.
 
-### 9. 🧵 Async AST Execution via Worker Threads
+### 9. Async AST Execution via Worker Threads
 - **Zero UI Starvation:** Offloads heavy tree-sitter AST queries, import/export parsing, and token chunking into background Node.js `worker_threads`.
 - **Non-blocking Slicing Fallback:** Gracefully falls back to macro-task promise slicing (`setImmediate`) to keep VS Code's UI thread completely unblocked.
 
 ---
 
-## 🏗️ How It Works: Architecture
+## How It Works: Architecture
 
 ```
                                   ┌────────────────────────────────────────────────────────┐
@@ -170,7 +170,7 @@ The server provides `remem://context-feed`, `remem://scratchpad`, and `remem://e
 
 ---
 
-## 📊 Token Optimization Benchmark
+## Token Optimization Benchmark
 
 ### Scenario: Modifying an Authentication Middleware Module in a 50-File Repository
 
@@ -182,7 +182,7 @@ The server provides `remem://context-feed`, `remem://scratchpad`, and `remem://e
 
 ---
 
-## 🚀 Quick Start & Installation
+## Quick Start & Installation
 
 ### Prerequisites
 - Node.js 18.x or newer
@@ -220,7 +220,7 @@ npm run install:ide
 
 ---
 
-## 💻 VS Code / Antigravity Commands
+## VS Code / Antigravity Commands
 
 Open the Command Palette (`Ctrl+Shift+P` on Linux/Windows, `Cmd+Shift+P` on macOS) and type `ReMem`:
 
@@ -247,7 +247,7 @@ Open the Command Palette (`Ctrl+Shift+P` on Linux/Windows, `Cmd+Shift+P` on macO
 
 ---
 
-## ⚙️ Configuration Settings
+## Configuration Settings
 
 Configure ReMem to match your development workflow in VS Code `settings.json`:
 
@@ -269,16 +269,16 @@ Configure ReMem to match your development workflow in VS Code `settings.json`:
 
 ---
 
-## 🔒 Security, Privacy & Safety Architecture
+## Security, Privacy & Safety Architecture
 
-### 🛡️ Non-Destructive Workspace & Git Safety Guarantees
+### Non-Destructive Workspace & Git Safety Guarantees
 - **100% Read-Only on User Source Code:** All AST parsers, file watchers, and token summarizers only read source code. ReMem **never writes, reformats, overwrites, or deletes your project files**.
 - **Isolated Storage Boundary:** All internal states, caches, and databases are strictly contained within `.antigravityMem/` (plus `.recall_scratchpad.md` for AI execution plans).
 - **Read-Only Git Tracking:** The Git integration inspects commit hashes and diff summaries via read-only queries (`git status`, `git log`, `git diffSummary`). It **never executes automated commits, pushes, checkouts, or resets**.
 - **Self-Healing SQLite Recovery:** If the SQLite ledger file is ever damaged (e.g. following an abrupt OS power outage), the engine automatically backs up the file and re-initializes a clean schema without crashing the editor host.
 - **Fail-Safe AST Parsing:** If the Web-Tree-Sitter WASM engine encounters an unhandled language grammar, it automatically falls back to regex-based parsing without raising unhandled rejections.
 
-### 🔐 Cryptographic Security
+### Cryptographic Security
 - **100% Local Processing:** Zero telemetry, zero external cloud database queries. All embeddings and databases live inside `.antigravityMem/` on your machine.
 - **AES-256-GCM Authenticated Encryption:** 128-bit authentication tag guarantees that tampered secret files cannot be decrypted.
 - **Zero Secrets in Vector Search:** Files marked `isEncrypted: true` are strictly barred from plaintext vector indexing.
@@ -286,7 +286,7 @@ Configure ReMem to match your development workflow in VS Code `settings.json`:
 
 ---
 
-## ❓ FAQ (Frequently Asked Questions)
+## FAQ (Frequently Asked Questions)
 
 ### How is ReMem different from full-codebase RAG or embeddings?
 Full-codebase RAG embeddings can still generate thousands of tokens of noisy source code chunks. ReMem extracts **structural signatures (classes, exports, interfaces)**, maintains an **AST blast radius graph**, and injects **past rollback notes**, giving the AI agent precise contextual awareness in under 300 tokens.
@@ -299,7 +299,7 @@ Full-codebase RAG embeddings can still generate thousands of tokens of noisy sou
 
 ---
 
-## 📁 Repository Structure
+## Repository Structure
 
 ```
 ReMem/
@@ -373,11 +373,11 @@ ReMem/
 
 ---
 
-## 🏷️ Keywords & Topic Tags
+## Keywords & Topic Tags
 `ai-coding-assistant` • `token-optimization` • `local-rag` • `vs-code-extension` • `antigravity-ide` • `context-window-optimization` • `git-error-ledger` • `ast-blast-radius` • `codebase-summarization` • `embedded-vector-search` • `sqlite-wasm` • `aes-256-gcm-vault` • `developer-tools` • `llm-memory`
 
 ---
 
-## 📄 License
+## License
 
 This project is open-source software licensed under the [MIT License](LICENSE).
