@@ -17,7 +17,3 @@ AGENTS.md
 CLAUDE.md
 .agents/
 *.tgz
-
-# Build artifacts
-*.tgz
-*.vsix
