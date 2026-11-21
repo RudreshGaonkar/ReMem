@@ -12,3 +12,12 @@ antigravity_extension.md
 Explanation.md
 
 .agents/remem-runtime/
+
+AGENTS.md
+CLAUDE.md
+.agents/
+*.tgz
+
+# Build artifacts
+*.tgz
+*.vsix
