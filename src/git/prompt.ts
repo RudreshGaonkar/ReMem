@@ -12,7 +12,7 @@ export async function promptForPostMortem(
   commitHash?: string,
   outputChannel?: vscode.OutputChannel
 ): Promise<ErrorLedgerEntry | null> {
-  const promptMessage = `ReMem: Switched from branch "${branchName}". Any post-mortem note or warning for AI?`;
+  const promptMessage = `Cuttlehawk: Switched from branch "${branchName}". Any post-mortem note or warning for AI?`;
 
   const note = await vscode.window.showInputBox({
     prompt: promptMessage,
@@ -21,7 +21,7 @@ export async function promptForPostMortem(
   });
 
   if (!note || note.trim().length === 0) {
-    outputChannel?.appendLine(`[ReMem Git Ledger] Post-mortem prompt skipped by user for branch: ${branchName}`);
+    outputChannel?.appendLine(`[Cuttlehawk Git Ledger] Post-mortem prompt skipped by user for branch: ${branchName}`);
     return null;
   }
 
@@ -54,8 +54,8 @@ export async function promptForPostMortem(
 
   await dbManager.flushToDisk();
 
-  vscode.window.showInformationMessage(`ReMem: Post-mortem note logged for AI memory (${branchName}).`);
-  outputChannel?.appendLine(`[ReMem Git Ledger] Logged error ledger entry for [${branchName}]: "${trimmedNote}"`);
+  vscode.window.showInformationMessage(`Cuttlehawk: Post-mortem note logged for AI memory (${branchName}).`);
+  outputChannel?.appendLine(`[Cuttlehawk Git Ledger] Logged error ledger entry for [${branchName}]: "${trimmedNote}"`);
 
   return {
     branch: branchName,

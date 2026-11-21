@@ -4,9 +4,11 @@ import { publishAtomic, fileVersion, isWorkspacePath, withAsyncFileLock } from '
 import { getLeanRulesContext } from './leanRules.js';
 import { getZeroFluffModeContext } from './security.js';
 
-export const AGENT_INSTRUCTION_FILES = ['AGENTS.md', 'CLAUDE.md', '.agents/rules/remem.md', '.antigravity/rules.md'];
-const begin = '<!-- remem:begin -->';
-const end = '<!-- remem:end -->';
+export const AGENT_INSTRUCTION_FILES = ['AGENTS.md', 'CLAUDE.md', '.agents/rules/cuttlehawk.md', '.antigravity/rules.md'];
+const begin = '<!-- cuttlehawk:begin -->';
+const end = '<!-- cuttlehawk:end -->';
+const managedBlock = /<!-- (cuttlehawk|remem):begin -->(?:(?!<!-- (?:cuttlehawk|remem):(?:begin|end) -->)[\s\S])*?<!-- \1:end -->/g;
+const marker = /<!-- (?:cuttlehawk|remem):(?:begin|end) -->/;
 
 export async function updateAgentInstructions(root: string, zeroFluffMode = false, signal?: AbortSignal): Promise<void> {
   for (const relative of AGENT_INSTRUCTION_FILES) {
@@ -14,26 +16,35 @@ export async function updateAgentInstructions(root: string, zeroFluffMode = fals
     if (!isWorkspacePath(root, file)) throw new Error('Unsafe agent instruction path: ' + relative);
     if (relative === '.antigravity/rules.md' && !fs.existsSync(file)) continue;
     await withAsyncFileLock(file, async (assertOwner) => {
-      const existing = fileVersion(file) ? await fs.promises.readFile(file, 'utf8') : '';
-      if (existing.includes(begin) !== existing.includes(end) ||
-          (existing.includes(begin) && existing.indexOf(begin) > existing.indexOf(end))) {
-        throw new Error('Malformed ReMem instruction markers in ' + relative);
-      }
+      const version = fileVersion(file);
+      const legacyRule = path.join(root, '.agents/rules/remem.md');
+      const legacyVersion = !version && relative === '.agents/rules/cuttlehawk.md'
+        && isWorkspacePath(root, legacyRule) ? fileVersion(legacyRule) : '';
+      const source = legacyVersion ? legacyRule : file;
+      const existing = version || legacyVersion ? await fs.promises.readFile(source, 'utf8') : '';
+      const clean = existing.replace(managedBlock, '');
+      if (marker.test(clean)) throw new Error('Malformed Cuttlehawk instruction markers in ' + relative);
       const newline = existing.includes('\r\n') ? '\r\n' : '\n';
       const block = [
         begin,
-        '## ReMem workspace context',
-        'At session start, read `.remem_context_feed.md` for the architecture map and `.recall_scratchpad.md` for current work. Use `remem_get_context` when available to retrieve relevant code, session state, and recorded errors.',
+        '## Cuttlehawk workspace context',
+        'At session start, read `.cuttlehawk_context_feed.md` for the architecture map and `.recall_scratchpad.md` for current work. Use `cuttlehawk_get_context` when available to retrieve relevant code, session state, and recorded errors.',
         getZeroFluffModeContext(zeroFluffMode) || 'Keep responses concise and report verification results.',
         getLeanRulesContext(),
         'Before making code changes, check input validation, authorization, and secret handling. Check access to protected assets, privacy and licensing obligations, and failure, concurrency, and rollback behavior. Apply the controls relevant to the change.',
         end,
       ].join('\n').replace(/\n/g, newline);
-      const next = existing.includes(begin)
-        ? existing.slice(0, existing.indexOf(begin)) + block + existing.slice(existing.indexOf(end) + end.length)
-        : (existing || (relative === '.agents/rules/remem.md' ? '---\ntrigger: always_on\n---\n' : '')) +
-          (existing ? newline + newline : '') + block + newline;
-      if (next !== existing) await publishAtomic(file, next, assertOwner, fileVersion(file) ? fs.statSync(file).mode & 0o777 : 0o644);
+      const firstBlock = existing.search(managedBlock);
+      const preamble = !existing && relative === '.agents/rules/cuttlehawk.md'
+        ? ['---', 'trigger: always_on', '---', ''].join(newline) : '';
+      const next = firstBlock >= 0
+        ? existing.slice(0, firstBlock) + block + existing.slice(firstBlock).replace(managedBlock, '').replace(/^(?:\r?\n)+$/, newline)
+        : (existing || preamble) + (existing ? newline + newline : '') + block + newline;
+      if (!version || next !== existing) {
+        const mode = version || legacyVersion ? fs.statSync(source).mode & 0o777 : 0o644;
+        await publishAtomic(file, next, assertOwner, mode);
+      }
+      if (legacyVersion && fileVersion(legacyRule) === legacyVersion) await fs.promises.unlink(legacyRule);
     }, signal);
   }
 }

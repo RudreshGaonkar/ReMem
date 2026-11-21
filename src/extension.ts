@@ -27,7 +27,7 @@ import { PreBootContextProvider } from './context/preboot.js';
 import { registerChatParticipant } from './ide/chat.js';
 import { AGENT_INSTRUCTION_FILES, updateAgentInstructions } from './context/instructions.js';
 import { getLeanRulesContext } from './context/leanRules.js';
-import { getZeroFluffModeContext, getZeroTrustSecurityPersonaContext } from './context/security.js';
+import { getZeroFluffModeContext, getZeroTrustSecurityPersonaContext, resolveZeroFluffMode } from './context/security.js';
 import { installSkillAndMcp } from './mcp/install.js';
 import { isWorkspacePath, withAsyncFileLock } from './core/files.js';
 import { drainWithin } from './core/workQueue.js';
@@ -56,21 +56,21 @@ let shutdown: AbortController | undefined;
 let fileWatcher: ReturnType<typeof setupAntiLoopFileWatcher> | undefined;
 let backgroundIndex: Promise<unknown> | undefined;
 
-/** StatusBar item showing ReMem state with a toggle/sync click handler. */
+/** StatusBar item showing Cuttlehawk state with a toggle/sync click handler. */
 let statusBarItem: vscode.StatusBarItem | undefined;
 
 /** When `false` the engine is paused: file-save summarization is disabled. */
 let isEngineActive: boolean = true;
 
 /** workspaceState key used to persist scratchpad content strictly within this workspace (prevents multi-window bleed). */
-const SCRATCHPAD_STATE_KEY = 'remem.scratchpadContent';
+const SCRATCHPAD_STATE_KEY = 'cuttlehawk.scratchpadContent';
 
 // ─── Activation ──────────────────────────────────────────────────────────────
 
 /**
  * Extension activation lifecycle entry point.
  *
- * `onStartupFinished` is listed in `activationEvents` so VS Code boots ReMem
+ * `onStartupFinished` is listed in `activationEvents` so VS Code boots Cuttlehawk
  * automatically on every workspace open — no manual command required.
  */
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
@@ -80,73 +80,81 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   outputChannel = vscode.window.createOutputChannel(CONFIG.OUTPUT_CHANNEL_NAME);
   context.subscriptions.push(outputChannel);
 
-  outputChannel.appendLine(`[ReMem] Activating ReMem AI Memory & Token Optimization Engine...`);
+  outputChannel.appendLine(`[Cuttlehawk] Activating Cuttlehawk AI Memory & Token Optimization Engine...`);
 
   // ── Register all commands unconditionally ─────────────────────────────────
   // Commands MUST be registered before any early-return guard, otherwise VS Code
-  // reports "command 'remem.X' not found" whenever activation exits early
+  // reports "command 'cuttlehawk.X' not found" whenever activation exits early
   // (e.g. no workspace folder open, or a dependency fails to initialise).
+  function reg(cmd: string, handler: (...args: any[]) => any): vscode.Disposable[] {
+    const legacy = cmd.replace(/^cuttlehawk\./, 'remem.');
+    return [
+      vscode.commands.registerCommand(cmd, handler),
+      vscode.commands.registerCommand(legacy, handler),
+    ];
+  }
+
   context.subscriptions.push(
-    vscode.commands.registerCommand('remem.installSkill', async () => {
+    ...reg('cuttlehawk.installSkill', async () => {
       const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-      if (!root) return vscode.window.showWarningMessage('ReMem: No workspace folder is open.');
+      if (!root) return vscode.window.showWarningMessage('Cuttlehawk: No workspace folder is open.');
       try {
         await installSkillAndMcp(fs.realpathSync(root), context.asAbsolutePath('out'), isZeroFluffModeEnabled());
-        return vscode.window.showInformationMessage('ReMem: Installed workspace skill and MCP configuration.');
+        return vscode.window.showInformationMessage('Cuttlehawk: Installed workspace skill and MCP configuration.');
       } catch (error) {
-        return vscode.window.showErrorMessage(`ReMem: Installation failed. ${error}`);
+        return vscode.window.showErrorMessage(`Cuttlehawk: Installation failed. ${error}`);
       }
     }),
-    vscode.commands.registerCommand('remem.status', () => {
+    ...reg('cuttlehawk.status', () => {
       const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-      if (!root) { vscode.window.showWarningMessage('ReMem: No workspace folder is open.'); return; }
+      if (!root) { vscode.window.showWarningMessage('Cuttlehawk: No workspace folder is open.'); return; }
       return showEngineStatus(root);
     }),
-    vscode.commands.registerCommand('remem.showScratchpad', () => openOrCreateScratchpad()),
-    vscode.commands.registerCommand('remem.purgeMemory', () => {
+    ...reg('cuttlehawk.showScratchpad', () => openOrCreateScratchpad()),
+    ...reg('cuttlehawk.purgeMemory', () => {
       const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-      if (!root) { vscode.window.showWarningMessage('ReMem: No workspace folder is open.'); return; }
+      if (!root) { vscode.window.showWarningMessage('Cuttlehawk: No workspace folder is open.'); return; }
       return purgeMemory(root, context);
     }),
-    vscode.commands.registerCommand('remem.searchSummaries', () => handleSearchCommand()),
-    vscode.commands.registerCommand('remem.reindexWorkspace', () => {
+    ...reg('cuttlehawk.searchSummaries', () => handleSearchCommand()),
+    ...reg('cuttlehawk.reindexWorkspace', () => {
       const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-      if (!root) { vscode.window.showWarningMessage('ReMem: No workspace folder is open.'); return; }
+      if (!root) { vscode.window.showWarningMessage('Cuttlehawk: No workspace folder is open.'); return; }
       return handleReindexCommand(root);
     }),
-    vscode.commands.registerCommand('remem.showDirectoryTree', () => {
+    ...reg('cuttlehawk.showDirectoryTree', () => {
       const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-      if (!root) { vscode.window.showWarningMessage('ReMem: No workspace folder is open.'); return; }
+      if (!root) { vscode.window.showWarningMessage('Cuttlehawk: No workspace folder is open.'); return; }
       return handleShowTreeCommand(root);
     }),
-    vscode.commands.registerCommand('remem.addPostMortem', () => handleAddPostMortemCommand()),
-    vscode.commands.registerCommand('remem.showErrorContext', () => handleShowErrorContextCommand()),
-    vscode.commands.registerCommand('remem.lockVault', () => handleLockVaultCommand()),
-    vscode.commands.registerCommand('remem.encryptActiveFile', () => handleEncryptActiveFileCommand()),
-    vscode.commands.registerCommand('remem.viewVaultSecrets', () => handleViewVaultSecretsCommand()),
-    vscode.commands.registerCommand('remem.getContext', () => handleGetContextCommand()),
-    vscode.commands.registerCommand('remem.toggleSync', () => handleToggleSyncCommand()),
-    vscode.commands.registerCommand('remem.reviewDiff', () => handleReviewDiffCommand()),
-    vscode.commands.registerCommand('remem.syncTaskProgress', () => handleSyncTaskProgressCommand()),
-    vscode.commands.registerCommand('remem.logDebt', () => handleLogDebtCommand()),
-    vscode.commands.registerCommand('remem.toggleZeroFluffMode', () => handleToggleZeroFluffModeCommand())
+    ...reg('cuttlehawk.addPostMortem', () => handleAddPostMortemCommand()),
+    ...reg('cuttlehawk.showErrorContext', () => handleShowErrorContextCommand()),
+    ...reg('cuttlehawk.lockVault', () => handleLockVaultCommand()),
+    ...reg('cuttlehawk.encryptActiveFile', () => handleEncryptActiveFileCommand()),
+    ...reg('cuttlehawk.viewVaultSecrets', () => handleViewVaultSecretsCommand()),
+    ...reg('cuttlehawk.getContext', () => handleGetContextCommand()),
+    ...reg('cuttlehawk.toggleSync', () => handleToggleSyncCommand()),
+    ...reg('cuttlehawk.reviewDiff', () => handleReviewDiffCommand()),
+    ...reg('cuttlehawk.syncTaskProgress', () => handleSyncTaskProgressCommand()),
+    ...reg('cuttlehawk.logDebt', () => handleLogDebtCommand()),
+    ...reg('cuttlehawk.toggleZeroFluffMode', () => handleToggleZeroFluffModeCommand())
   );
 
   const workspaceFolders = vscode.workspace.workspaceFolders;
   if (!workspaceFolders || workspaceFolders.length === 0) {
-    outputChannel.appendLine(`[ReMem] No active workspace folder detected. Extension running in standby mode.`);
+    outputChannel.appendLine(`[Cuttlehawk] No active workspace folder detected. Extension running in standby mode.`);
     return;
   }
 
   const workspaceRoot = workspaceFolders[0].uri.fsPath;
-  outputChannel.appendLine(`[ReMem] Workspace Root: ${workspaceRoot}`);
+  outputChannel.appendLine(`[Cuttlehawk] Workspace Root: ${workspaceRoot}`);
 
   // ── Strict Workspace Isolation & Sandboxing ──────────────────────────────
   workspaceIsolation = new WorkspaceIsolationManager(context, workspaceRoot);
 
   // ── StatusBar item (created early so it is visible even if init takes time) ─
   statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
-  statusBarItem.command = 'remem.toggleSync';
+  statusBarItem.command = 'cuttlehawk.toggleSync';
   updateStatusBar(); // set initial label
   statusBarItem.show();
   context.subscriptions.push(statusBarItem);
@@ -161,7 +169,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     signal.throwIfAborted();
     pipeline = new SummarizerPipeline(dbManager);
 
-    outputChannel.appendLine(`[ReMem Database] SQLite ledger and Orama vector search initialized for workspace.`);
+    outputChannel.appendLine(`[Cuttlehawk Database] SQLite ledger and Orama vector search initialized for workspace.`);
 
     // ── Session recovery ────────────────────────────────────────────────────
     await performSessionRecovery(context, workspaceRoot);
@@ -170,7 +178,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vaultStorage = new VaultStorage(workspaceRoot);
     vaultSession = new VaultSessionManager(context.secrets, workspaceRoot, outputChannel);
     pipeline.setVault(vaultStorage, vaultSession);
-    outputChannel.appendLine(`[ReMem Vault] Secure Secrets Vault initialized (backed by native SecretStorage).`);
+    outputChannel.appendLine(`[Cuttlehawk Vault] Secure Secrets Vault initialized (backed by native SecretStorage).`);
 
     const persistedContent = context.workspaceState.get<string>(SCRATCHPAD_STATE_KEY);
     scratchpad = new ScratchpadManager(workspaceRoot);
@@ -179,7 +187,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       try {
         if (dbManager?.isReady) await scratchpad?.syncSessionState(dbManager, vscode.window.activeTextEditor?.document.uri.fsPath);
       } catch (error) {
-        outputChannel?.appendLine(`[ReMem] Scratchpad sync failed: ${error}`);
+        outputChannel?.appendLine(`[Cuttlehawk] Scratchpad sync failed: ${error}`);
       }
     };
     await syncScratchpad();
@@ -198,11 +206,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
     const syncInstructions = async () => {
       try { await updateAgentInstructions(workspaceRoot, isZeroFluffModeEnabled(), signal); }
-      catch (error) { outputChannel?.appendLine(`[ReMem] Instruction sync failed: ${error}`); }
+      catch (error) { outputChannel?.appendLine(`[Cuttlehawk] Instruction sync failed: ${error}`); }
     };
     await syncInstructions();
     context.subscriptions.push(vscode.workspace.onDidChangeConfiguration((event) => {
-      if (event.affectsConfiguration('remem.ZeroFluffMode')) syncInstructions();
+      if (event.affectsConfiguration('cuttlehawk.ZeroFluffMode') || event.affectsConfiguration('remem.ZeroFluffMode')) syncInstructions();
     }));
 
     const watchWorkspaceFile = (relative: string) => {
@@ -213,7 +221,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     const scratchpadWatcher = watchWorkspaceFile(CONFIG.SCRATCHPAD_FILE_NAME);
     context.subscriptions.push(scratchpadWatcher.onDidChange(syncScratchpad), scratchpadWatcher.onDidCreate(syncScratchpad),
       scratchpadWatcher.onDidDelete(syncScratchpad));
-    const feedWatcher = watchWorkspaceFile('.remem_context_feed.md');
+    const feedWatcher = watchWorkspaceFile(CONFIG.CONTEXT_FEED_FILE_NAME);
     context.subscriptions.push(feedWatcher.onDidDelete(() => {
       if (dbManager?.isReady) graphEngine?.updateContextFeedSilently().catch((error) => outputChannel?.appendLine(String(error)));
     }));
@@ -245,7 +253,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         }
         await engine.updateContextFeedSilently(signal);
       }).catch((error) => {
-        if (!signal.aborted) outputChannel?.appendLine(`[ReMem Indexer Error] Background indexing failed: ${error}`);
+        if (!signal.aborted) outputChannel?.appendLine(`[Cuttlehawk Indexer Error] Background indexing failed: ${error}`);
       });
 
     // ── Spec & Task Sync Engine ────────────────────
@@ -272,12 +280,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     context.subscriptions.push({ dispose: () => clearInterval(scratchpadPersistTimer) });
 
   } catch (err) {
-    outputChannel.appendLine(`[ReMem Database Error] Failed to initialize database: ${err}`);
-    if (!signal.aborted) vscode.window.showErrorMessage(`ReMem Database initialization failed: ${err}`);
+    outputChannel.appendLine(`[Cuttlehawk Database Error] Failed to initialize database: ${err}`);
+    if (!signal.aborted) vscode.window.showErrorMessage(`Cuttlehawk Database initialization failed: ${err}`);
     return;
   }
 
-  outputChannel.appendLine(`[ReMem] ReMem Context Engine activated successfully.`);
+  outputChannel.appendLine(`[Cuttlehawk] Cuttlehawk Context Engine activated successfully.`);
 }
 
 // ─── Deactivation ─────────────────────────────────────────────────────────────
@@ -323,7 +331,7 @@ export async function deactivate(): Promise<void> {
   }
 
   if (outputChannel) {
-    outputChannel.appendLine(`[ReMem] Deactivating ReMem Context Engine.`);
+    outputChannel.appendLine(`[Cuttlehawk] Deactivating Cuttlehawk Context Engine.`);
     outputChannel.dispose();
   }
 }
@@ -360,8 +368,8 @@ async function performSessionRecovery(
   const schemaOk = await dbManager.verifySchemaIntegrity();
   outputChannel?.appendLine(
     schemaOk
-      ? `[ReMem Recovery] Schema integrity: ✅ intact.`
-      : `[ReMem Recovery] Schema integrity: ⚠️  repaired (missing tables were recreated).`
+      ? `[Cuttlehawk Recovery] Schema integrity: ✅ intact.`
+      : `[Cuttlehawk Recovery] Schema integrity: ⚠️  repaired (missing tables were recreated).`
   );
 
   // ── 2. Vector index re-hydration ─────────────────────────────────────────
@@ -369,16 +377,16 @@ async function performSessionRecovery(
 
   if (sqliteCount > 0 && vectorCount === 0 && !dbManager.vector.needsRebuild) {
     outputChannel?.appendLine(
-      `[ReMem Recovery] Orama index is empty but SQLite has ${sqliteCount} summaries. ` +
+      `[Cuttlehawk Recovery] Orama index is empty but SQLite has ${sqliteCount} summaries. ` +
       `Re-hydrating vector index from disk…`
     );
     const rehydrated = await dbManager.rehydrateVectorIndexFromSqlite();
     outputChannel?.appendLine(
-      `[ReMem Recovery] Vector index re-hydrated with ${rehydrated} document(s).`
+      `[Cuttlehawk Recovery] Vector index re-hydrated with ${rehydrated} document(s).`
     );
   } else {
     outputChannel?.appendLine(
-      `[ReMem Recovery] Session state: ${sqliteCount} summaries, ${vectorCount} vectors indexed. ` +
+      `[Cuttlehawk Recovery] Session state: ${sqliteCount} summaries, ${vectorCount} vectors indexed. ` +
       `DB: ${fs.existsSync(dbPath) ? '✅ found' : '🆕 new'}.`
     );
   }
@@ -393,12 +401,12 @@ function updateStatusBar(): void {
   if (!statusBarItem) return;
 
   if (isEngineActive) {
-    statusBarItem.text = `$(brain) ReMem: Active`;
-    statusBarItem.tooltip = 'ReMem is active. Click to pause auto-summarization or trigger a manual sync.';
+    statusBarItem.text = `$(brain) Cuttlehawk: Active`;
+    statusBarItem.tooltip = 'Cuttlehawk is active. Click to pause auto-summarization or trigger a manual sync.';
     statusBarItem.backgroundColor = undefined;
   } else {
-    statusBarItem.text = `$(debug-pause) ReMem: Paused`;
-    statusBarItem.tooltip = 'ReMem is paused. Click to resume.';
+    statusBarItem.text = `$(debug-pause) Cuttlehawk: Paused`;
+    statusBarItem.tooltip = 'Cuttlehawk is paused. Click to resume.';
     statusBarItem.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
   }
 }
@@ -413,8 +421,8 @@ async function handleToggleSyncCommand(): Promise<void> {
     // Resume
     isEngineActive = true;
     updateStatusBar();
-    vscode.window.showInformationMessage('ReMem: Engine resumed. Auto-summarization is active.');
-    outputChannel?.appendLine('[ReMem] Engine resumed by user.');
+    vscode.window.showInformationMessage('Cuttlehawk: Engine resumed. Auto-summarization is active.');
+    outputChannel?.appendLine('[Cuttlehawk] Engine resumed by user.');
     return;
   }
 
@@ -427,12 +435,12 @@ async function handleToggleSyncCommand(): Promise<void> {
         value: 'sync',
       },
       {
-        label: '$(debug-pause) Pause ReMem',
+        label: '$(debug-pause) Pause Cuttlehawk',
         description: 'Temporarily disable auto-summarization (re-click to resume)',
         value: 'pause',
       },
     ],
-    { placeHolder: 'ReMem is active — what would you like to do?' }
+    { placeHolder: 'Cuttlehawk is active — what would you like to do?' }
   );
 
   if (!choice) return;
@@ -440,27 +448,27 @@ async function handleToggleSyncCommand(): Promise<void> {
   if (choice.value === 'pause') {
     isEngineActive = false;
     updateStatusBar();
-    vscode.window.showInformationMessage('ReMem: Engine paused. Click the StatusBar item to resume.');
-    outputChannel?.appendLine('[ReMem] Engine paused by user.');
+    vscode.window.showInformationMessage('Cuttlehawk: Engine paused. Click the StatusBar item to resume.');
+    outputChannel?.appendLine('[Cuttlehawk] Engine paused by user.');
   } else if (choice.value === 'sync') {
     if (!gitWatcher) {
-      vscode.window.showWarningMessage('ReMem: Git watcher is not running (no .git repo detected).');
+      vscode.window.showWarningMessage('Cuttlehawk: Git watcher is not running (no .git repo detected).');
       return;
     }
     vscode.window.withProgress(
       {
         location: vscode.ProgressLocation.Notification,
-        title: 'ReMem: Scanning for remote Git changes…',
+        title: 'Cuttlehawk: Scanning for remote Git changes…',
         cancellable: false,
       },
       async () => {
         const result = await gitWatcher!.triggerManualSync();
         if (result.summarizedCount > 0) {
           vscode.window.showInformationMessage(
-            `ReMem Sync: ${result.summarizedCount} file(s) auto-summarized from teammate changes.`
+            `Cuttlehawk Sync: ${result.summarizedCount} file(s) auto-summarized from teammate changes.`
           );
         } else {
-          vscode.window.showInformationMessage('ReMem Sync: No new remote changes detected.');
+          vscode.window.showInformationMessage('Cuttlehawk Sync: No new remote changes detected.');
         }
       }
     );
@@ -476,9 +484,9 @@ function ensureMemoryDirectory(workspaceRoot: string): void {
   const memDir = getMemoryDirPath(workspaceRoot);
   if (!fs.existsSync(memDir)) {
     fs.mkdirSync(memDir, { recursive: true });
-    outputChannel?.appendLine(`[ReMem] Created local memory directory at: ${memDir}`);
+    outputChannel?.appendLine(`[Cuttlehawk] Created local memory directory at: ${memDir}`);
   } else {
-    outputChannel?.appendLine(`[ReMem] Located existing memory directory at: ${memDir}`);
+    outputChannel?.appendLine(`[Cuttlehawk] Located existing memory directory at: ${memDir}`);
   }
 }
 
@@ -507,13 +515,13 @@ async function showEngineStatus(workspaceRoot: string): Promise<void> {
   };
 
   const message =
-    `ReMem Status: Initialized: ${status.isInitialized} | ` +
+    `Cuttlehawk Status: Initialized: ${status.isInitialized} | ` +
     `Summaries: ${stats.fileSummariesCount} | Error Notes: ${stats.errorNotesCount} | ` +
     `Vault Secrets: ${vaultCount} (Unlocked: ${isVaultUnlocked}) | ` +
     `Engine: ${isEngineActive ? 'Active' : 'Paused'}`;
 
   vscode.window.showInformationMessage(message);
-  outputChannel?.appendLine(`[ReMem Status Check]\n${JSON.stringify(status, null, 2)}`);
+  outputChannel?.appendLine(`[Cuttlehawk Status Check]\n${JSON.stringify(status, null, 2)}`);
 }
 
 /**
@@ -521,7 +529,7 @@ async function showEngineStatus(workspaceRoot: string): Promise<void> {
  */
 async function handleGetContextCommand(): Promise<void> {
   if (!dbManager || !scratchpad || !astAnalyzer) {
-    vscode.window.showWarningMessage('ReMem engine components are not ready.');
+    vscode.window.showWarningMessage('Cuttlehawk engine components are not ready.');
     return;
   }
 
@@ -550,7 +558,7 @@ async function handleGetContextCommand(): Promise<void> {
     content: `${assembledContext}\n\n*(Copied to clipboard for AI system prompt)*\n`,
   });
   await vscode.window.showTextDocument(doc, { preview: true });
-  vscode.window.showInformationMessage('ReMem: Token-optimized context generated and copied to clipboard.');
+  vscode.window.showInformationMessage('Cuttlehawk: Token-optimized context generated and copied to clipboard.');
 }
 
 /**
@@ -558,14 +566,14 @@ async function handleGetContextCommand(): Promise<void> {
  */
 async function handleReviewDiffCommand(): Promise<void> {
   if (!diffAuditor) {
-    vscode.window.showWarningMessage('ReMem Diff Auditor is not ready.');
+    vscode.window.showWarningMessage('Cuttlehawk Diff Auditor is not ready.');
     return;
   }
 
   await vscode.window.withProgress(
     {
       location: vscode.ProgressLocation.Notification,
-      title: 'ReMem: Auditing Git diff and AST dependencies...',
+      title: 'Cuttlehawk: Auditing Git diff and AST dependencies...',
       cancellable: false,
     },
     async () => {
@@ -588,11 +596,11 @@ async function handleReviewDiffCommand(): Promise<void> {
       const issueCount = report.issues.length;
       if (issueCount === 0) {
         vscode.window.showInformationMessage(
-          `ReMem Diff Audit: Clean! ${report.filesAudited} file(s) audited, 0 issues detected.`
+          `Cuttlehawk Diff Audit: Clean! ${report.filesAudited} file(s) audited, 0 issues detected.`
         );
       } else {
         vscode.window.showWarningMessage(
-          `ReMem Diff Audit: Audited ${report.filesAudited} file(s) with ${issueCount} item(s) flagged. Review opened in editor.`
+          `Cuttlehawk Diff Audit: Audited ${report.filesAudited} file(s) with ${issueCount} item(s) flagged. Review opened in editor.`
         );
       }
     }
@@ -604,14 +612,14 @@ async function handleReviewDiffCommand(): Promise<void> {
  */
 async function handleSyncTaskProgressCommand(): Promise<void> {
   if (!taskTracker) {
-    vscode.window.showWarningMessage('ReMem Task Tracker is not ready.');
+    vscode.window.showWarningMessage('Cuttlehawk Task Tracker is not ready.');
     return;
   }
 
   const report = await taskTracker.syncProgress(true);
   if (report) {
     outputChannel?.appendLine(
-      `[ReMem Spec Tracker] Synced "${report.relativePath}": ${report.completedTasks}/${report.totalTasks} complete (${report.percentage}%). Active phase: "${report.activePhase?.title || 'None'}".`
+      `[Cuttlehawk Spec Tracker] Synced "${report.relativePath}": ${report.completedTasks}/${report.totalTasks} complete (${report.percentage}%). Active phase: "${report.activePhase?.title || 'None'}".`
     );
   }
 }
@@ -621,20 +629,20 @@ async function handleSyncTaskProgressCommand(): Promise<void> {
  */
 async function handleLogDebtCommand(): Promise<void> {
   if (!techDebtLedger || !scratchpad) {
-    vscode.window.showWarningMessage('ReMem Tech Debt Ledger is not ready.');
+    vscode.window.showWarningMessage('Cuttlehawk Tech Debt Ledger is not ready.');
     return;
   }
 
   await vscode.window.withProgress(
     {
       location: vscode.ProgressLocation.Notification,
-      title: 'ReMem: Collecting Tech Debt & Shortcuts...',
+      title: 'Cuttlehawk: Collecting Tech Debt & Shortcuts...',
       cancellable: false,
     },
     async () => {
       const result = await techDebtLedger!.collectAndRecordDebt();
       outputChannel?.appendLine(
-        `[ReMem Tech Debt] Scanned ${result.filesScanned} file(s). Found ${result.totalItems} item(s) across ${result.filesWithDebt} file(s).`
+        `[Cuttlehawk Tech Debt] Scanned ${result.filesScanned} file(s). Found ${result.totalItems} item(s) across ${result.filesWithDebt} file(s).`
       );
 
       // Open scratchpad in editor for user review
@@ -645,7 +653,7 @@ async function handleLogDebtCommand(): Promise<void> {
       }
 
       vscode.window.showInformationMessage(
-        `ReMem: Collected ${result.totalItems} tech debt item(s) into .recall_scratchpad.md.`
+        `Cuttlehawk: Collected ${result.totalItems} tech debt item(s) into .recall_scratchpad.md.`
       );
     }
   );
@@ -657,8 +665,8 @@ async function handleLogDebtCommand(): Promise<void> {
 function handleLockVaultCommand(): void {
   if (vaultSession) {
     vaultSession.lock();
-    vscode.window.showInformationMessage('ReMem: Vault in-memory session cleared. Native credentials remain safely secured in System Keychain.');
-    outputChannel?.appendLine('[ReMem Vault] Vault session cache manually cleared.');
+    vscode.window.showInformationMessage('Cuttlehawk: Vault in-memory session cleared. Native credentials remain safely secured in System Keychain.');
+    outputChannel?.appendLine('[Cuttlehawk Vault] Vault session cache manually cleared.');
   }
 }
 
@@ -678,8 +686,8 @@ async function handleEncryptActiveFileCommand(): Promise<void> {
 
   const success = await encryptAndStoreSecret(filePath, relativePath, content, vaultStorage, vaultSession);
   if (success) {
-    vscode.window.showInformationMessage(`ReMem: Encrypted "${relativePath}" and saved into Secure Vault (Native Keychain).`);
-    outputChannel?.appendLine(`[ReMem Vault] Encrypted and stored secret: ${relativePath}`);
+    vscode.window.showInformationMessage(`Cuttlehawk: Encrypted "${relativePath}" and saved into Secure Vault (Native Keychain).`);
+    outputChannel?.appendLine(`[Cuttlehawk Vault] Encrypted and stored secret: ${relativePath}`);
   }
 }
 
@@ -688,13 +696,13 @@ async function handleEncryptActiveFileCommand(): Promise<void> {
  */
 async function handleViewVaultSecretsCommand(): Promise<void> {
   if (!vaultStorage || !vaultSession) {
-    vscode.window.showWarningMessage('ReMem Vault is not ready.');
+    vscode.window.showWarningMessage('Cuttlehawk Vault is not ready.');
     return;
   }
 
   const secrets = vaultStorage.getAllSecrets();
   if (secrets.length === 0) {
-    vscode.window.showInformationMessage('ReMem Vault is empty. No encrypted secrets stored.');
+    vscode.window.showInformationMessage('Cuttlehawk Vault is empty. No encrypted secrets stored.');
     return;
   }
 
@@ -725,7 +733,7 @@ async function handleViewVaultSecretsCommand(): Promise<void> {
  */
 async function handleAddPostMortemCommand(): Promise<void> {
   if (!dbManager) {
-    vscode.window.showWarningMessage('ReMem engine is not ready.');
+    vscode.window.showWarningMessage('Cuttlehawk engine is not ready.');
     return;
   }
 
@@ -747,7 +755,7 @@ async function handleAddPostMortemCommand(): Promise<void> {
  */
 async function handleShowErrorContextCommand(): Promise<void> {
   if (!dbManager) {
-    vscode.window.showWarningMessage('ReMem engine is not ready.');
+    vscode.window.showWarningMessage('Cuttlehawk engine is not ready.');
     return;
   }
 
@@ -774,21 +782,21 @@ async function handleShowErrorContextCommand(): Promise<void> {
  */
 async function handleReindexCommand(workspaceRoot: string): Promise<void> {
   if (!dbManager || !pipeline) {
-    vscode.window.showWarningMessage('ReMem engine is not ready.');
+    vscode.window.showWarningMessage('Cuttlehawk engine is not ready.');
     return;
   }
 
   vscode.window.withProgress(
     {
       location: vscode.ProgressLocation.Notification,
-      title: 'ReMem: Indexing workspace files...',
+      title: 'Cuttlehawk: Indexing workspace files...',
       cancellable: false,
     },
     async () => {
       const result = await indexWorkspace(workspaceRoot, dbManager!, pipeline!, outputChannel, traceabilityTracker || undefined, shutdown?.signal);
       await graphEngine?.updateContextFeedSilently();
       vscode.window.showInformationMessage(
-        `ReMem Indexing Complete: ${result.indexedCount} updated, ${result.skippedCount} cached (unchanged).`
+        `Cuttlehawk Indexing Complete: ${result.indexedCount} updated, ${result.skippedCount} cached (unchanged).`
       );
     }
   );
@@ -811,7 +819,7 @@ async function handleShowTreeCommand(workspaceRoot: string): Promise<void> {
  */
 async function handleSearchCommand(): Promise<void> {
   if (!dbManager) {
-    vscode.window.showWarningMessage('ReMem database is not yet ready.');
+    vscode.window.showWarningMessage('Cuttlehawk database is not yet ready.');
     return;
   }
 
@@ -866,21 +874,26 @@ async function openOrCreateScratchpad(): Promise<void> {
  * terminal commands only — no pleasantries, no explanations.
  */
 function isZeroFluffModeEnabled(): boolean {
-  return vscode.workspace.getConfiguration('remem').get<boolean>('ZeroFluffMode', false);
+  const config = vscode.workspace.getConfiguration('cuttlehawk');
+  return resolveZeroFluffMode(
+    config.inspect<boolean>('ZeroFluffMode'),
+    config.get<boolean>('ZeroFluffMode'),
+    vscode.workspace.getConfiguration('remem').get<boolean>('ZeroFluffMode'),
+  );
 }
 
 async function handleToggleZeroFluffModeCommand(): Promise<void> {
-  const config = vscode.workspace.getConfiguration('remem');
-  const current = config.get<boolean>('ZeroFluffMode', false);
+  const config = vscode.workspace.getConfiguration('cuttlehawk');
+  const current = isZeroFluffModeEnabled();
   await config.update('ZeroFluffMode', !current, vscode.ConfigurationTarget.Workspace);
   if (!current) {
     vscode.window.showInformationMessage(
-      '⚡ ReMem Zero Fluff Mode ACTIVATED — Context feed is now execution-only. Zero pleasantries.'
+      '⚡ Cuttlehawk Zero Fluff Mode ACTIVATED — Context feed is now execution-only. Zero pleasantries.'
     );
-    outputChannel?.appendLine('[ReMem] Zero Fluff Mode activated.');
+    outputChannel?.appendLine('[Cuttlehawk] Zero Fluff Mode activated.');
   } else {
-    vscode.window.showInformationMessage('ReMem Zero Fluff Mode deactivated — Normal context mode restored.');
-    outputChannel?.appendLine('[ReMem] Zero Fluff Mode deactivated.');
+    vscode.window.showInformationMessage('Cuttlehawk Zero Fluff Mode deactivated — Normal context mode restored.');
+    outputChannel?.appendLine('[Cuttlehawk] Zero Fluff Mode deactivated.');
   }
 }
 
@@ -924,7 +937,7 @@ async function purgeMemory(workspaceRoot: string, context: vscode.ExtensionConte
     await indexWorkspace(workspaceRoot, database, pipeline, outputChannel, traceabilityTracker || undefined, shutdown?.signal);
     await graphEngine?.updateContextFeedSilently();
 
-    vscode.window.showInformationMessage('ReMem: Local memory directory and databases purged and reset.');
-    outputChannel?.appendLine(`[ReMem] Local memory and databases purged and reset.`);
+    vscode.window.showInformationMessage('Cuttlehawk: Local memory directory and databases purged and reset.');
+    outputChannel?.appendLine(`[Cuttlehawk] Local memory and databases purged and reset.`);
   }
 }

@@ -49,7 +49,7 @@ export async function triggerGitSyncSummarization(
       summarizedCount++;
 
       outputChannel?.appendLine(
-        `[ReMem Sync Watcher] Auto-summarized remote change: ${relativePath}`
+        `[Cuttlehawk Sync Watcher] Auto-summarized remote change: ${relativePath}`
       );
     } catch {
       // Binary or unreadable – skip silently

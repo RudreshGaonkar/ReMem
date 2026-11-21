@@ -3,14 +3,14 @@ import * as path from 'path';
 import { DatabaseManager } from '../database/index.js';
 import { ASTAnalyzer } from '../ast/analyzer.js';
 import { publishAtomic, isWorkspacePath, withAsyncFileLock } from '../core/files.js';
-import { shouldIgnorePath } from '../config.js';
+import { shouldIgnorePath, CONFIG } from '../config.js';
 
 /**
  * Persistent Knowledge Graph Engine
  *
- * Extracts dependency and symbol mapping from the isolated SQLite ledger (remem_ledger.sqlite)
+ * Extracts dependency and symbol mapping from the isolated SQLite ledger (cuttlehawk_ledger.sqlite)
  * and AST analyzer, compressing it into a token-efficient architecture map persisted at
- * `.remem_context_feed.md` in the workspace root.
+ * `.cuttlehawk_context_feed.md` in the workspace root.
  *
  * Updates silently in the background on file saves without blocking the IDE or triggering
  * file-watcher infinite loops.
@@ -123,7 +123,7 @@ export class KnowledgeGraphEngine {
       totalEdges += node.imports.size;
     }
 
-    lines.push('# 🗺️ REMEM PERSISTENT KNOWLEDGE GRAPH (`.remem_context_feed.md`)');
+    lines.push('# 🗺️ CUTTLEHAWK PERSISTENT KNOWLEDGE GRAPH (`.cuttlehawk_context_feed.md`)');
     lines.push(`> Project: \`${projectName}\` | Synced: ${timestamp} | Nodes: ${totalNodes} | Edges: ${totalEdges}`);
     lines.push('');
     lines.push('## 📦 MODULE TOPOLOGY & EXPORTED SYMBOLS');
@@ -169,10 +169,10 @@ export class KnowledgeGraphEngine {
   }
 
   /**
-   * Updates `.remem_context_feed.md` silently in the background.
+   * Updates `.cuttlehawk_context_feed.md` silently in the background.
    */
   public async updateContextFeedSilently(signal?: AbortSignal): Promise<string> {
-    const feedPath = path.join(this.workspaceRoot, '.remem_context_feed.md');
+    const feedPath = path.join(this.workspaceRoot, CONFIG.CONTEXT_FEED_FILE_NAME);
     return withAsyncFileLock(feedPath, async (assertOwner) => {
       if (!isWorkspacePath(this.workspaceRoot, feedPath)) throw new Error('Unsafe context feed path');
       const content = await this.generateCompressedArchitectureMap();
@@ -188,11 +188,14 @@ export class KnowledgeGraphEngine {
    * Reads or generates the current context feed content.
    */
   public async getOrGenerateContextFeed(persistIfMissing = true): Promise<string> {
-    const feedPath = path.join(this.workspaceRoot, '.remem_context_feed.md');
+    const feedPath = path.join(this.workspaceRoot, CONFIG.CONTEXT_FEED_FILE_NAME);
+    const legacyFeedPath = path.join(this.workspaceRoot, CONFIG.LEGACY_CONTEXT_FEED_FILE_NAME);
     if (!isWorkspacePath(this.workspaceRoot, feedPath)) throw new Error('Unsafe context feed path');
     try {
       if (fs.existsSync(feedPath)) {
         return await fs.promises.readFile(feedPath, 'utf8');
+      } else if (fs.existsSync(legacyFeedPath) && isWorkspacePath(this.workspaceRoot, legacyFeedPath)) {
+        return await fs.promises.readFile(legacyFeedPath, 'utf8');
       }
     } catch {
       // Fall through to generation

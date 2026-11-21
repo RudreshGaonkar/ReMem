@@ -11,7 +11,7 @@ import { AsyncASTParser } from '../ast/asyncParser.js';
 import { ASTAnalyzer } from '../ast/analyzer.js';
 import { assembleContext } from '../ast/injector.js';
 import { ScratchpadManager } from '../ast/scratchpad.js';
-import { shouldIgnorePath } from '../config.js';
+import { CONFIG, shouldIgnorePath } from '../config.js';
 import { drainWithin, WorkspaceWorkQueue } from '../core/workQueue.js';
 import { isWorkspacePath } from '../core/files.js';
 import { SecretShield } from '../core/ignore.js';
@@ -26,7 +26,7 @@ import { SpecTaskTracker } from '../task/tracker.js';
 import { LeanTraceabilityTracker } from '../task/traceability.js';
 import { installSkillAndMcp } from './install.js';
 
-declare const REMEM_VERSION: string;
+declare const CUTTLEHAWK_VERSION: string;
 
 const toolText = (text: string) => ({ content: [{ type: 'text' as const, text }] });
 const fileInput = z.string().min(1).max(1024);
@@ -88,8 +88,9 @@ async function serve(root: string, zeroFluffMode: boolean): Promise<void> {
     if (zeroFluffMode) return true;
     const settings = path.join(root, '.vscode/settings.json');
     try {
-      return isWorkspacePath(root, settings) && fs.existsSync(settings) &&
-        parse(fs.readFileSync(settings, 'utf8'))?.['remem.ZeroFluffMode'] === true;
+      if (!isWorkspacePath(root, settings) || !fs.existsSync(settings)) return false;
+      const parsed = parse(fs.readFileSync(settings, 'utf8'));
+      return (parsed?.['cuttlehawk.ZeroFluffMode'] ?? parsed?.['remem.ZeroFluffMode']) === true;
     } catch {
       return false;
     }
@@ -97,14 +98,19 @@ async function serve(root: string, zeroFluffMode: boolean): Promise<void> {
 
   async function syncInstructions(): Promise<void> {
     try { await updateAgentInstructions(root, zeroFluffEnabled(), shutdown.signal); }
-    catch (error) { console.error('[ReMem] Could not sync workspace instructions:', error); }
+    catch (error) { console.error('[Cuttlehawk] Could not sync workspace instructions:', error); }
   }
 
-  if (!fs.existsSync(path.join(root, 'AGENTS.md'))) void syncInstructions();
+  const agentsPath = path.join(root, 'AGENTS.md');
+  if (!fs.existsSync(agentsPath) || (fs.existsSync(agentsPath) && fs.readFileSync(agentsPath, 'utf8').includes('remem:begin'))) {
+    await syncInstructions();
+  }
   const fileWatcher = watch(root, {
     ignoreInitial: true,
     followSymlinks: false,
-    ignored: (file, stat) => file !== scratchpad.filePath && path.basename(file) !== '.remem_context_feed.md' &&
+    ignored: (file, stat) => file !== scratchpad.filePath &&
+      path.basename(file) !== CONFIG.CONTEXT_FEED_FILE_NAME &&
+      path.basename(file) !== CONFIG.LEGACY_CONTEXT_FEED_FILE_NAME &&
       (!isWorkspacePath(root, file) || shouldIgnorePath(file + (stat?.isDirectory() ? path.sep : ''))),
     awaitWriteFinish: { stabilityThreshold: 250, pollInterval: 50 },
   });
@@ -123,17 +129,18 @@ async function serve(root: string, zeroFluffMode: boolean): Promise<void> {
       await graph.updateContextFeedSilently(shutdown.signal);
     }).catch((error) => {
       indexFailed = true;
-      if (!shutdown.signal.aborted) log.appendLine(`[ReMem] Indexing failed: ${error}`);
+      if (!shutdown.signal.aborted) log.appendLine(`[Cuttlehawk] Indexing failed: ${error}`);
     }).finally(() => { indexing = false; });
 
-  const report = (error: unknown) => log.appendLine(`[ReMem] Workspace update failed: ${error}`);
+  const report = (error: unknown) => log.appendLine(`[Cuttlehawk] Workspace update failed: ${error}`);
   const queue = new WorkspaceWorkQueue(async (files, signal, overflow) => {
     if (overflow) {
       report('Event capacity exceeded, rescanning the workspace');
       await indexWorkspace(root, db, pipeline, log, tracker, signal);
     }
     const changed = files.filter((file) => file !== scratchpad.filePath &&
-      file !== path.join(root, '.remem_context_feed.md'));
+      file !== path.join(root, CONFIG.CONTEXT_FEED_FILE_NAME) &&
+      file !== path.join(root, CONFIG.LEGACY_CONTEXT_FEED_FILE_NAME));
     for (let offset = 0; offset < changed.length; offset += 16) {
       signal.throwIfAborted();
       await Promise.all(changed.slice(offset, offset + 16).map((file) =>
@@ -142,23 +149,23 @@ async function serve(root: string, zeroFluffMode: boolean): Promise<void> {
     signal.throwIfAborted();
     if (changed.some((file) => path.extname(file).toLowerCase() === '.md')) await tasks.syncProgress();
     if (files.includes(scratchpad.filePath) || changed.length) await syncSession();
-    if (changed.length || files.includes(path.join(root, '.remem_context_feed.md'))) {
+    if (changed.length || files.includes(path.join(root, CONFIG.CONTEXT_FEED_FILE_NAME)) || files.includes(path.join(root, CONFIG.LEGACY_CONTEXT_FEED_FILE_NAME))) {
       await graph.updateContextFeedSilently(signal);
     }
   }, report);
   fileWatcher.on('error', report);
   fileWatcher.on('all', (event, file) => {
     if (!['add', 'change', 'unlink'].includes(event)) return;
-    if (path.basename(file) === '.remem_context_feed.md' && event !== 'unlink') return;
+    if ((path.basename(file) === CONFIG.CONTEXT_FEED_FILE_NAME || path.basename(file) === CONFIG.LEGACY_CONTEXT_FEED_FILE_NAME) && event !== 'unlink') return;
     queue.add(file);
   });
 
-  const server = new McpServer({ name: 'remem', version: REMEM_VERSION });
-  const status = () => indexing || queue.busy ? { 'remem/indexStatus': 'indexing' }
-    : indexFailed ? { 'remem/indexStatus': 'partial' } : undefined;
+  const server = new McpServer({ name: 'cuttlehawk', version: CUTTLEHAWK_VERSION });
+  const status = () => indexing || queue.busy ? { 'cuttlehawk/indexStatus': 'indexing' }
+    : indexFailed ? { 'cuttlehawk/indexStatus': 'partial' } : undefined;
   const indexedText = (text: string) => ({ ...toolText(text), _meta: status() });
 
-  server.registerTool('remem_search', {
+  server.registerTool('cuttlehawk_search', {
     description: 'Search indexed workspace summaries and code symbols.',
     inputSchema: { query: z.string().min(1).max(500), limit: z.number().int().min(1).max(20).default(5) },
   }, async ({ query, limit }) => {
@@ -171,7 +178,7 @@ async function serve(root: string, zeroFluffMode: boolean): Promise<void> {
     }));
   });
 
-  server.registerTool('remem_blast_radius', {
+  server.registerTool('cuttlehawk_blast_radius', {
     description: 'List imports, direct dependents, and exported symbols for a workspace file.',
     inputSchema: { file: fileInput },
   }, async ({ file }) => {
@@ -185,7 +192,7 @@ async function serve(root: string, zeroFluffMode: boolean): Promise<void> {
     return indexedText(JSON.stringify({ imports: relative(imports), dependents: relative(dependents), exports }));
   });
 
-  server.registerTool('remem_get_context', {
+  server.registerTool('cuttlehawk_get_context', {
     description: 'Retrieve compact workspace context with task progress and security guidance.',
     inputSchema: { file: fileInput.optional(), branch: branchInput.optional() },
   }, async ({ file, branch: requestedBranch }) => {
@@ -199,7 +206,7 @@ async function serve(root: string, zeroFluffMode: boolean): Promise<void> {
     }));
   });
 
-  server.registerTool('remem_log_postmortem', {
+  server.registerTool('cuttlehawk_log_postmortem', {
     description: 'Record a verified failure and how to prevent recurrence.',
     inputSchema: { note: z.string().trim().min(1).max(4000), file: fileInput.optional(), branch: branchInput.optional() },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
@@ -214,7 +221,7 @@ async function serve(root: string, zeroFluffMode: boolean): Promise<void> {
     return toolText(JSON.stringify({ id }));
   });
 
-  server.registerTool('remem_save_session_state', {
+  server.registerTool('cuttlehawk_save_session_state', {
     description: 'Save a session checkpoint to the workspace scratchpad and resume ledger.',
     inputSchema: {
       activeTask: taskInput.optional(),
@@ -235,7 +242,7 @@ async function serve(root: string, zeroFluffMode: boolean): Promise<void> {
     'error-ledger': async () => getFormattedErrorContext(db, undefined, await branch()),
   };
   for (const [name, read] of Object.entries(resources)) {
-    server.registerResource(name, 'remem://' + name, { mimeType: 'text/markdown' }, async (uri) => {
+    server.registerResource(name, 'cuttlehawk://' + name, { mimeType: 'text/markdown' }, async (uri) => {
       return { contents: [{ uri: uri.href, mimeType: 'text/markdown', text: await read() }], _meta: status() };
     });
   }
@@ -261,7 +268,7 @@ async function serve(root: string, zeroFluffMode: boolean): Promise<void> {
         process.exit(0);
       }
     }).catch((error) => {
-      console.error('[ReMem] Shutdown failed:', error);
+      console.error('[Cuttlehawk] Shutdown failed:', error);
       process.exit(1);
     });
   };
@@ -288,19 +295,19 @@ async function main(): Promise<void> {
     const arg = args.shift();
     if (arg === '--workspace' && args.length) root = args.shift()!;
     else if (arg === '--zero-fluff') zeroFluffMode = true;
-    else throw new Error('Usage: remem-mcp [install] [--workspace DIRECTORY] [--zero-fluff]');
+    else throw new Error('Usage: cuttlehawk-mcp [install] [--workspace DIRECTORY] [--zero-fluff]');
   }
   root = fs.realpathSync(root);
   if (!fs.statSync(root).isDirectory()) throw new Error('Workspace must be a directory.');
   if (install) {
     await installSkillAndMcp(root, __dirname, zeroFluffMode);
-    console.error('ReMem skill and MCP configuration installed in ' + root);
+    console.error('Cuttlehawk skill and MCP configuration installed in ' + root);
   } else {
     await serve(root, zeroFluffMode);
   }
 }
 
 void main().catch((error) => {
-  console.error('[ReMem MCP]', error);
+  console.error('[Cuttlehawk MCP]', error);
   process.exitCode = 1;
 });

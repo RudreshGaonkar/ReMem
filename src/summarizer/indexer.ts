@@ -23,7 +23,7 @@ export async function indexWorkspace(
   tracker?: LeanTraceabilityTracker,
   signal?: AbortSignal,
 ): Promise<IndexingResult> {
-  outputChannel?.appendLine(`[ReMem Indexer] Starting initial workspace scan for: ${workspaceRoot}`);
+  outputChannel?.appendLine(`[Cuttlehawk Indexer] Starting initial workspace scan for: ${workspaceRoot}`);
 
   let totalFilesFound = 0;
   let indexedCount = 0;
@@ -37,7 +37,7 @@ export async function indexWorkspace(
       } catch (error) {
         signal?.throwIfAborted();
         skippedCount++;
-        outputChannel?.appendLine(`[ReMem Indexer] Could not index ${file}: ${error}`);
+        outputChannel?.appendLine(`[Cuttlehawk Indexer] Could not index ${file}: ${error}`);
       }
     }));
   }
@@ -53,7 +53,7 @@ export async function indexWorkspace(
   await dbManager.flushToDisk();
 
   outputChannel?.appendLine(
-    `[ReMem Indexer] Workspace indexing completed. Scanned: ${totalFilesFound}, Newly Indexed/Updated: ${indexedCount}, Unchanged (Cached): ${skippedCount}`
+    `[Cuttlehawk Indexer] Workspace indexing completed. Scanned: ${totalFilesFound}, Newly Indexed/Updated: ${indexedCount}, Unchanged (Cached): ${skippedCount}`
   );
 
   return {

@@ -1,6 +1,6 @@
 <div align="center">
 
-# ReMem — Local AI Memory & Token Optimization Context Engine
+# Cuttlehawk — Local AI Context & AST Engine
 
 **Local code search, dependency graphs, and session handoff for editor and command-line agents.**
 
@@ -26,53 +26,78 @@
 
 ---
 
-## Overview: What is ReMem?
+## What is Cuttlehawk?
 
-ReMem indexes a workspace locally and shares summaries, exported symbols, module dependencies, task progress, and post-mortem notes with coding agents. The editor extension and standalone MCP server use the same index and session ledger.
+**Cuttlehawk** is a 100% local, zero-cloud AI context, AST blast-radius, and persistent memory engine built for **Antigravity IDE**, **VS Code**, and headless CLI coding agents (**Claude Code**, **OpenAI Codex CLI**, and any `stdio` MCP client).
+
+Most AI coding assistants burn thousands of tokens blindly grepping files, hallucinate broken imports across distant modules, forget architectural decisions between sessions, and repeat the exact same mistakes after a `git reset` or branch rollback. Cuttlehawk eliminates that friction by indexing your codebase locally into an **SQLite ledger** and **Orama full-text/vector search engine**, tracking symbol dependencies, and recording reverted-branch post-mortems—all while enforcing a built-in **4-point AppSec, IP protection, and compliance gate** before a single line of code is written.
+
+### Core Capabilities
+
+| Capability | What It Does |
+|---|---|
+| **Dual IDE + CLI Architecture** | Runs natively as a VS Code / Antigravity IDE extension *and* as a standalone `stdio` MCP server (`cuttlehawk-mcp`) with a portable `SKILL.md`—both sharing the same lock-safe local storage engine. |
+| **AST Blast-Radius & Dependency Graph** | Maps callers, imports, and symbol relationships so your AI agent sees the exact impact of an edit before touching shared code. |
+| **Persistent Cross-Session Memory & Git Error Ledger** | Automatically logs reverted branches, failed approaches, and active session checkpoints so agents never repeat past regressions. |
+| **Token-Efficient Zero-Fluff Context** | Serves pre-distilled architectural feeds and compact search snippets instead of dumping bloated raw files into the LLM context window. |
+| **Built-In 4-Point Security & Compliance Gate** | Enforces server-derived authorization, secret isolation, asset/IP anti-theft checks, and DPDP/GDPR data-minimization guardrails automatically. |
+
+---
+
+### Why "Cuttlehawk"?
+
+The name fuses two apex predators—mirroring how the engine balances **instant adaptability** with **surgical precision**:
+
+> **🦑 Cuttlefish — Adaptive Multi-Environment Intelligence**
+> Cuttlefish possess dual-lobe brains capable of instant camouflage and spatial memory, adapting seamlessly to any reef. Cuttlehawk adapts effortlessly across programming languages, editor sidebars, and headless terminal agents without external cloud dependencies.
+
+> **🦅 Goshawk — High-Speed Tunnel Focus**
+> Goshawks weave through dense forest canopies at full speed without clipping a branch. Cuttlehawk cuts straight through dense repositories to surface exact AST blast-radius dependencies and high-signal context—zero token waste, zero noise.
+
+Cuttlehawk indexes a workspace locally and shares summaries, exported symbols, module dependencies, task progress, and post-mortem notes with coding agents. The editor extension and standalone MCP server use the same index and session ledger.
 
 ## Sidebar and CLI integration
 
-The extension keeps `.remem_context_feed.md` and `.recall_scratchpad.md` at the workspace root. It maintains a marked ReMem block in `AGENTS.md`, `CLAUDE.md`, and `.agents/rules/remem.md`, plus `.antigravity/rules.md` when that legacy file exists. Existing instructions outside the block are preserved. Start a new agent session to pick up workspace instructions. Agents that load these files can follow the pointers even when they bypass the optional `@remem` participant.
+The extension keeps `.cuttlehawk_context_feed.md` and `.recall_scratchpad.md` at the workspace root. It maintains a marked Cuttlehawk block in `AGENTS.md`, `CLAUDE.md`, and `.agents/rules/cuttlehawk.md`, plus `.antigravity/rules.md` when that legacy file exists. Existing instructions outside the block are preserved. Start a new agent session to pick up workspace instructions. Agents that load these files can follow the pointers even when they bypass the optional `@cuttlehawk` participant.
 
-The sidebar instructions and assembled context carry ReMem's security and lean rules. Zero-Fluff Mode adds the output-only directive when enabled. These are prompt instructions, and adherence depends on the host and model. The diff auditor independently flags supported security and overbuild patterns and shows current spec checklist progress for verification.
+The sidebar instructions and assembled context carry Cuttlehawk's security and lean rules. Zero-Fluff Mode adds the output-only directive when enabled. These are prompt instructions, and adherence depends on the host and model. The diff auditor independently flags supported security and overbuild patterns and shows current spec checklist progress for verification.
 
-Run **ReMem: Install CLI Skill & MCP Config** in the editor or run the installer from a source checkout.
+Run **Cuttlehawk: Install CLI Skill & MCP Config** in the editor or run the installer from a source checkout.
 
 ```bash
 npm run build:mcp
-node out/remem-mcp.js install --workspace /path/to/project
+node out/cuttlehawk-mcp.js install --workspace /path/to/project
 ```
 
-To distribute a local npm package, run `npm pack`. Install from that tarball with `npm exec --package /path/to/remem-context-engine-0.2.0.tgz -- remem-mcp install --workspace /path/to/project`. The installer copies the server and WASM assets into the project and adds workspace-scoped registrations:
+To distribute a local npm package, run `npm pack`. Install from that tarball with `npm exec --package /path/to/cuttlehawk-context-engine-0.2.0.tgz -- cuttlehawk-mcp install --workspace /path/to/project`. The installer copies the server and WASM assets into the project and adds workspace-scoped registrations:
 
 | Host | MCP configuration | Skill discovery |
 |---|---|---|
 | VS Code | `.vscode/mcp.json` | Workspace instructions in `AGENTS.md` |
-| Antigravity IDE and CLI | `.agents/mcp_config.json` | `.agents/skills/remem/SKILL.md` |
-| Codex CLI | `.codex/config.toml` | `.agents/skills/remem/SKILL.md` |
-| Claude Code | `.mcp.json` | `.claude/skills/remem/SKILL.md` |
+| Antigravity IDE and CLI | `.agents/mcp_config.json` | `.agents/skills/cuttlehawk/SKILL.md` |
+| Codex CLI | `.codex/config.toml` | `.agents/skills/cuttlehawk/SKILL.md` |
+| Claude Code | `.mcp.json` | `.claude/skills/cuttlehawk/SKILL.md` |
 
-Reload the host and approve its workspace trust or MCP prompt if requested. The installer registers a local Node process. Its absolute paths refer to the machine where the installer ran. Use `--zero-fluff` to enable Zero-Fluff Mode for the standalone server. You can also launch the server directly with `node out/remem-mcp.js --workspace /path/to/project`.
+Reload the host and approve its workspace trust or MCP prompt if requested. The installer registers a local Node process. Its absolute paths refer to the machine where the installer ran. Use `--zero-fluff` to enable Zero-Fluff Mode for the standalone server. You can also launch the server directly with `node out/cuttlehawk-mcp.js --workspace /path/to/project`.
 
 | MCP tool | Purpose |
 |---|---|
-| `remem_search` | Search file summaries and symbols. |
-| `remem_blast_radius` | Return direct imports, dependents, and exports. |
-| `remem_get_context` | Assemble compact code, architecture, task, resume, and error context. |
-| `remem_log_postmortem` | Record a failure and the lesson that prevents it recurring. |
-| `remem_save_session_state` | Persist a checkpoint in the scratchpad and session ledger. |
+| `cuttlehawk_search` | Search file summaries and symbols. |
+| `cuttlehawk_blast_radius` | Return direct imports, dependents, and exports. |
+| `cuttlehawk_get_context` | Assemble compact code, architecture, task, resume, and error context. |
+| `cuttlehawk_log_postmortem` | Record a failure and the lesson that prevents it recurring. |
+| `cuttlehawk_save_session_state` | Persist a checkpoint in the scratchpad and session ledger. |
 
-The server provides `remem://context-feed`, `remem://scratchpad`, and `remem://error-ledger`. The error resource shows recorded notes for the current branch. Both targets use file locks and atomic snapshot replacement for shared SQLite and search data. ReMem automatically reclaims locks whose owner has exited or whose recorded age exceeds 10 seconds.
+The server provides `cuttlehawk://context-feed`, `cuttlehawk://scratchpad`, and `cuttlehawk://error-ledger`. The error resource shows recorded notes for the current branch. Both targets use file locks and atomic snapshot replacement for shared SQLite and search data. Cuttlehawk automatically reclaims locks whose owner has exited or whose recorded age exceeds 10 seconds.
 
 ---
 
+## The Problems Cuttlehawk Solves
 
-## The Problems ReMem Solves
-
-| Problem in Modern AI Coding | What Happens Without ReMem | How ReMem Solves It |
+| Problem in Modern AI Coding | What Happens Without Cuttlehawk | How Cuttlehawk Solves It |
 |---|---|---|
 | **Context Window Exhaustion** | Large codebases exceed LLM context windows (8k/32k/128k), forcing truncation. | **Hierarchical Summarization:** Compresses source files into 15–30 token structural summaries with SHA-256 caching. |
-| **Wasteful AI File Scans** | AI coding agents execute slow `find`, `grep`, and `cat` commands across the workspace to orient themselves. | **Pre-Boot Knowledge Graph (`.remem_context_feed.md`):** Topology and exports provide a starting point for focused source inspection. |
+| **Wasteful AI File Scans** | AI coding agents execute slow `find`, `grep`, and `cat` commands across the workspace to orient themselves. | **Pre-Boot Knowledge Graph (`.cuttlehawk_context_feed.md`):** Topology and exports provide a starting point for focused source inspection. |
 | **Cross-Window Context Bleed** | Opening multiple projects in VS Code causes scratchpads and state to contaminate other windows. | **Strict Workspace Isolation:** Scopes SQLite, Orama, and state strictly to `workspaceFolders[0]` via `workspaceState`. |
 | **Context Amnesia & Repeated Bugs** | When a developer reverts a broken commit or branch, the AI repeats the exact same mistake. | **Git Error Ledger:** Watches `.git/HEAD` and prompts for post-mortem warnings, prepending them to future AI prompts. |
 | **Plaintext Secrets Exposure** | AI prompts ingest `.env`, `*.pem`, and `secrets.json` in plaintext. | **Secure Secrets Vault:** Encrypts sensitive files using AES-256-GCM with 100k-iteration PBKDF2 & 1-hour in-memory cache. |
@@ -90,7 +115,7 @@ The server provides `remem://context-feed`, `remem://scratchpad`, and `remem://e
 
 ### 2. Git Branch & Rollback "Error Ledger"
 - **Zero-Polling Watcher:** Listens to kernel-level OS file events on `.git/HEAD` and `.git/refs/**` (zero CPU/battery waste).
-- **Post-Mortem Note Capture:** When switching branches or reverting commits, ReMem prompts: *"Why was this feature reverted?"*
+- **Post-Mortem Note Capture:** When switching branches or reverting commits, Cuttlehawk prompts: *"Why was this feature reverted?"*
 - **Mistake Prevention:** Automatically prepends past error warnings to the AI prompt whenever working on that file or branch again.
 
 ### 3. Secure Secrets Vault (AES-256-GCM + PBKDF2)
@@ -107,8 +132,8 @@ The server provides `remem://context-feed`, `remem://scratchpad`, and `remem://e
 - Persisted strictly in `workspaceState` (scoped to individual workspace windows) to prevent state contamination across open projects.
 
 ### 6. Persistent Knowledge Graph & Pre-Boot Directive
-- **Topology Extraction:** Directly extracts all workspace module imports, exports, and dependents from SQLite `remem_ledger.sqlite`.
-- **Token-Compressed Architecture Map:** Compresses the graph into `.remem_context_feed.md` in the workspace root, containing node summaries, exported symbols, and a compact dependency adjacency matrix.
+- **Topology Extraction:** Directly extracts all workspace module imports, exports, and dependents from SQLite `cuttlehawk_ledger.sqlite`.
+- **Token-Compressed Architecture Map:** Compresses the graph into `.cuttlehawk_context_feed.md` in the workspace root, containing node summaries, exported symbols, and a compact dependency adjacency matrix.
 - **Silent Background Updates:** Refreshes automatically in the background on document saves without interrupting active coding.
 - **Pre-Boot Context:** The optional chat participant assembles context directly. Other agents can follow the workspace instruction pointers or request context through MCP.
 
@@ -118,7 +143,7 @@ The server provides `remem://context-feed`, `remem://scratchpad`, and `remem://e
 - **Enforced Execution CWD:** Mandates the active workspace root as the absolute `cwd` for all terminal executions and child process spawns.
 
 ### 8. Anti-Loop File Watcher with 1200ms Debounce
-- **Self-Trigger Protection:** Strict guard clauses instantly drop change events for internal files (`.antigravityMem`, `.recall_scratchpad.md`, `.remem_context_feed.md`).
+- **Self-Trigger Protection:** Strict guard clauses instantly drop change events for internal files (`.antigravityMem`, `.recall_scratchpad.md`, `.cuttlehawk_context_feed.md`).
 - **1200ms Save Debounce:** Throttles save events per file, eliminating CPU spikes and infinite save loops while keeping memory records in continuous sync.
 
 ### 9. Async AST Execution via Worker Threads
@@ -165,7 +190,7 @@ The server provides `remem://context-feed`, `remem://scratchpad`, and `remem://e
              └──────────────────┼───────────────────────────────────────────────────┼───────────────────────┘
                                 │                                                   │
                                 ▼                                                   ▼
-            .antigravityMem/remem_ledger.sqlite                     .antigravityMem/orama_index.json
+            .antigravityMem/cuttlehawk_ledger.sqlite                .antigravityMem/orama_index.json
 ```
 
 ---
@@ -178,7 +203,7 @@ The server provides `remem://context-feed`, `remem://scratchpad`, and `remem://e
 |---|---|---|---|---|---|---|
 | **Raw Full Codebase Scan** | All 50 files sent raw | ~150,000 | 0 | **~150,000** | **0%** (Baseline) | High latency, hits rate limits |
 | **Manual Multi-File Open** | 5 related source files | ~12,500 | 0 | **~12,500** | **91.6%** | Moderate latency, manual overhead |
-| **ReMem Optimized Injection** | Active file + Blast Radius + Error Ledger + Scratchpad | 0 raw files | ~250 | **~250** | **99.8%** | **Sub-second response, minimal cost** |
+| **Cuttlehawk Optimized Injection** | Active file + Blast Radius + Error Ledger + Scratchpad | 0 raw files | ~250 | **~250** | **99.8%** | **Sub-second response, minimal cost** |
 
 ---
 
@@ -190,8 +215,8 @@ The server provides `remem://context-feed`, `remem://scratchpad`, and `remem://e
 
 ### 1. Clone & Install Dependencies
 ```bash
-git clone https://github.com/RudreshGaonkar/ReMem.git
-cd ReMem
+git clone https://github.com/RudreshGaonkar/Cuttlehawk.git
+cd Cuttlehawk
 npm install
 ```
 
@@ -209,61 +234,61 @@ npm run watch
 # Package as a .vsix extension file
 npm run package
 
-# Package and install with the editor CLI (set REMEM_IDE_COMMAND to override)
+# Package and install with the editor CLI (set CUTTLEHAWK_IDE_COMMAND to override)
 npm run install:ide
 ```
 
 ### 3. Run Locally in VS Code / Antigravity
 1. Open the project folder in VS Code or Antigravity IDE.
 2. Press `F5` (or click **Run > Start Debugging**) to open an **Extension Development Host** window.
-3. Open any workspace in the new window. ReMem automatically creates `.antigravityMem/` in the project root.
+3. Open any workspace in the new window. Cuttlehawk automatically creates `.antigravityMem/` in the project root.
 
 ---
 
 ## VS Code / Antigravity Commands
 
-Open the Command Palette (`Ctrl+Shift+P` on Linux/Windows, `Cmd+Shift+P` on macOS) and type `ReMem`:
+Open the Command Palette (`Ctrl+Shift+P` on Linux/Windows, `Cmd+Shift+P` on macOS) and type `Cuttlehawk`:
 
 | Command | Identifier | Description |
 |---|---|---|
-| **ReMem: Check Context Engine Status** | `remem.status` | Inspects workspace status, indexed summary counts, error notes, and vault lock state. |
-| **ReMem: Toggle Engine / Manual Sync** | `remem.toggleSync` | Pauses/resumes file-save auto-summarization or triggers a manual sync sweep for remote Git changes. |
-| **ReMem: Generate Token-Optimized AI Context** | `remem.getContext` | Assembles file summary, blast radius, error ledger, and scratchpad into a compact ~250-token payload and copies to clipboard. |
-| **ReMem: Open Active Scratchpad** | `remem.showScratchpad` | Opens `.recall_scratchpad.md` in the editor to track multi-step execution plans. |
-| **ReMem: Search Context Summaries** | `remem.searchSummaries` | Fast embedded search across all indexed project summaries using `@orama/orama`. |
-| **ReMem: Show Workspace Structure Tree** | `remem.showDirectoryTree` | Generates and displays a clean visual tree of your workspace hierarchy. |
-| **ReMem: Log Post-Mortem / Error Note** | `remem.addPostMortem` | Manually records a post-mortem note or rollback warning for the active context. |
-| **ReMem: Show Active Error Ledger Context** | `remem.showErrorContext` | Displays past rollback warnings and notes tied to the currently open file or branch. |
-| **ReMem: Encrypt Active File to Vault** | `remem.encryptActiveFile` | Encrypts the active sensitive file with AES-256-GCM and stores it in `.antigravityMem/vault.enc`. |
-| **ReMem: View/Decrypt Vault Secrets** | `remem.viewVaultSecrets` | Prompts for master password and decrypts a chosen secret in an isolated viewer. |
-| **ReMem: Lock Secure Secrets Vault** | `remem.lockVault` | Immediately wipes cached master password credentials from memory. |
-| **ReMem: Re-index Workspace Files** | `remem.reindexWorkspace` | Manually triggers a background rescan and indexation of workspace files. |
-| **ReMem: Purge and Rebuild Local Memory** | `remem.purgeMemory` | Completely clears local memory caches and resets databases (modal confirmation required). |
-| **ReMem: Audit Active / Staged Diff** | `remem.reviewDiff` | Audits staged or unstaged diffs for security violations, overbuilding, and spec compliance. |
-| **ReMem: Sync Spec & Task Progress** | `remem.syncTaskProgress` | Synchronizes task checklist progress against specification files. |
-| **ReMem: Collect Tech Debt Ledger** | `remem.logDebt` | Scans workspace and aggregates TODO/FIXME debt items into the debt ledger. |
-| **ReMem: Toggle Zero-Fluff Mode** | `remem.toggleZeroFluffMode` | Toggles Zero-Fluff execution mode (silent 4-point audit, no `<thinking>` tags, outputs only hardened code/diffs). |
-| **ReMem: Install CLI Skill & MCP Config** | `remem.installSkill` | Automatically installs ReMem CLI skill and workspace MCP config for VS Code, Antigravity, Codex, or Claude Code. |
+| **Cuttlehawk: Check Context Engine Status** | `cuttlehawk.status` | Inspects workspace status, indexed summary counts, error notes, and vault lock state. |
+| **Cuttlehawk: Toggle Engine / Manual Sync** | `cuttlehawk.toggleSync` | Pauses/resumes file-save auto-summarization or triggers a manual sync sweep for remote Git changes. |
+| **Cuttlehawk: Generate Token-Optimized AI Context** | `cuttlehawk.getContext` | Assembles file summary, blast radius, error ledger, and scratchpad into a compact ~250-token payload and copies to clipboard. |
+| **Cuttlehawk: Open Active Scratchpad** | `cuttlehawk.showScratchpad` | Opens `.recall_scratchpad.md` in the editor to track multi-step execution plans. |
+| **Cuttlehawk: Search Context Summaries** | `cuttlehawk.searchSummaries` | Fast embedded search across all indexed project summaries using `@orama/orama`. |
+| **Cuttlehawk: Show Workspace Structure Tree** | `cuttlehawk.showDirectoryTree` | Generates and displays a clean visual tree of your workspace hierarchy. |
+| **Cuttlehawk: Log Post-Mortem / Error Note** | `cuttlehawk.addPostMortem` | Manually records a post-mortem note or rollback warning for the active context. |
+| **Cuttlehawk: Show Active Error Ledger Context** | `cuttlehawk.showErrorContext` | Displays past rollback warnings and notes tied to the currently open file or branch. |
+| **Cuttlehawk: Encrypt Active File to Vault** | `cuttlehawk.encryptActiveFile` | Encrypts the active sensitive file with AES-256-GCM and stores it in `.antigravityMem/vault.enc`. |
+| **Cuttlehawk: View/Decrypt Vault Secrets** | `cuttlehawk.viewVaultSecrets` | Prompts for master password and decrypts a chosen secret in an isolated viewer. |
+| **Cuttlehawk: Lock Secure Secrets Vault** | `cuttlehawk.lockVault` | Immediately wipes cached master password credentials from memory. |
+| **Cuttlehawk: Re-index Workspace Files** | `cuttlehawk.reindexWorkspace` | Manually triggers a background rescan and indexation of workspace files. |
+| **Cuttlehawk: Purge and Rebuild Local Memory** | `cuttlehawk.purgeMemory` | Completely clears local memory caches and resets databases (modal confirmation required). |
+| **Cuttlehawk: Audit Active / Staged Diff** | `cuttlehawk.reviewDiff` | Audits staged or unstaged diffs for security violations, overbuilding, and spec compliance. |
+| **Cuttlehawk: Sync Spec & Task Progress** | `cuttlehawk.syncTaskProgress` | Synchronizes task checklist progress against specification files. |
+| **Cuttlehawk: Collect Tech Debt Ledger** | `cuttlehawk.logDebt` | Scans workspace and aggregates TODO/FIXME debt items into the debt ledger. |
+| **Cuttlehawk: Toggle Zero-Fluff Mode** | `cuttlehawk.toggleZeroFluffMode` | Toggles Zero-Fluff execution mode (silent 4-point audit, no `<thinking>` tags, outputs only hardened code/diffs). |
+| **Cuttlehawk: Install CLI Skill & MCP Config** | `cuttlehawk.installSkill` | Automatically installs Cuttlehawk CLI skill and workspace MCP config for VS Code, Antigravity, Codex, or Claude Code. |
 
 ---
 
 ## Configuration Settings
 
-Configure ReMem to match your development workflow in VS Code `settings.json`:
+Configure Cuttlehawk to match your development workflow in VS Code `settings.json`:
 
 ```json
 {
   // Automatically summarize code files upon saving (default: true)
-  "remem.enableAutoSummarize": true,
+  "cuttlehawk.enableAutoSummarize": true,
 
   // Duration in minutes to cache vault master password in memory (default: 60)
-  "remem.vaultSessionTimeoutMinutes": 60,
+  "cuttlehawk.vaultSessionTimeoutMinutes": 60,
 
   // Number of conversation turns before untouched files are pruned from context (default: 3)
-  "remem.lruContextTurnLimit": 3,
+  "cuttlehawk.lruContextTurnLimit": 3,
 
   // Zero-Fluff Mode: silent 4-point audit before modifying code, emits no thinking tags, outputs only code/diffs (default: false)
-  "remem.ZeroFluffMode": false
+  "cuttlehawk.ZeroFluffMode": false
 }
 ```
 
@@ -272,7 +297,7 @@ Configure ReMem to match your development workflow in VS Code `settings.json`:
 ## Security, Privacy & Safety Architecture
 
 ### Non-Destructive Workspace & Git Safety Guarantees
-- **100% Read-Only on User Source Code:** All AST parsers, file watchers, and token summarizers only read source code. ReMem **never writes, reformats, overwrites, or deletes your project files**.
+- **100% Read-Only on User Source Code:** All AST parsers, file watchers, and token summarizers only read source code. Cuttlehawk **never writes, reformats, overwrites, or deletes your project files**.
 - **Isolated Storage Boundary:** All internal states, caches, and databases are strictly contained within `.antigravityMem/` (plus `.recall_scratchpad.md` for AI execution plans).
 - **Read-Only Git Tracking:** The Git integration inspects commit hashes and diff summaries via read-only queries (`git status`, `git log`, `git diffSummary`). It **never executes automated commits, pushes, checkouts, or resets**.
 - **Self-Healing SQLite Recovery:** If the SQLite ledger file is ever damaged (e.g. following an abrupt OS power outage), the engine automatically backs up the file and re-initializes a clean schema without crashing the editor host.
@@ -288,29 +313,29 @@ Configure ReMem to match your development workflow in VS Code `settings.json`:
 
 ## FAQ (Frequently Asked Questions)
 
-### How is ReMem different from full-codebase RAG or embeddings?
-Full-codebase RAG embeddings can still generate thousands of tokens of noisy source code chunks. ReMem extracts **structural signatures (classes, exports, interfaces)**, maintains an **AST blast radius graph**, and injects **past rollback notes**, giving the AI agent precise contextual awareness in under 300 tokens.
+### How is Cuttlehawk different from full-codebase RAG or embeddings?
+Full-codebase RAG embeddings can still generate thousands of tokens of noisy source code chunks. Cuttlehawk extracts **structural signatures (classes, exports, interfaces)**, maintains an **AST blast radius graph**, and injects **past rollback notes**, giving the AI agent precise contextual awareness in under 300 tokens.
 
-### Why does ReMem use `sql.js` (WebAssembly) instead of `better-sqlite3`?
-`better-sqlite3` requires compiling native C++ binaries with `node-gyp`. VS Code extensions run inside Electron, which frequently encounters Node ABI version mismatches across OS platforms. `sql.js` compiles SQLite to pure WebAssembly, making ReMem **100% portable with zero native compilation prerequisites**.
+### Why does Cuttlehawk use `sql.js` (WebAssembly) instead of `better-sqlite3`?
+`better-sqlite3` requires compiling native C++ binaries with `node-gyp`. VS Code extensions run inside Electron, which frequently encounters Node ABI version mismatches across OS platforms. `sql.js` compiles SQLite to pure WebAssembly, making Cuttlehawk **100% portable with zero native compilation prerequisites**.
 
-### Does ReMem send my code or secrets to any external server?
-**No.** ReMem runs 100% locally on your machine. All SQLite databases, vector indexes, and encrypted vault files are stored inside your local `.antigravityMem/` folder.
+### Does Cuttlehawk send my code or secrets to any external server?
+**No.** Cuttlehawk runs 100% locally on your machine. All SQLite databases, vector indexes, and encrypted vault files are stored inside your local `.antigravityMem/` folder.
 
 ---
 
 ## Repository Structure
 
 ```
-ReMem/
+Cuttlehawk/
 ├── package.json               # Extension manifest & npm scripts (v0.2.0)
 ├── tsconfig.json              # TypeScript compilation config
 ├── esbuild.js                 # Production bundler & WASM asset manager
-├── README.md                  # SEO-optimized project overview & guide
+├── README.md                  # Project overview & guide
 ├── Explanation.md             # In-depth architectural & interview handbook
 ├── LICENSE                    # MIT License
 ├── skills/
-│   └── remem/SKILL.md         # ReMem CLI agent skill definition
+│   └── cuttlehawk/SKILL.md    # Cuttlehawk CLI agent skill definition
 ├── scripts/
 │   └── install-ide.cjs        # Script for direct IDE installation
 ├── tests/                     # Test suite

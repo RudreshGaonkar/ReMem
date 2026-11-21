@@ -1,6 +1,6 @@
 /**
  * Security Persona: Zero-Trust AppSec Engineer
- * Injected pre-generation into AI prompts via remem.getContext.
+ * Injected pre-generation into AI prompts via cuttlehawk.getContext.
  * Enforces proactive defensive coding against OWASP Top 10 vulnerabilities
  * while eliminating the token cost and latency of post-generation LLM scanning.
  */
@@ -70,9 +70,20 @@ export function prependSecurityPersona(promptText: string): string {
 
 /**
  * VS Code configuration key for the Zero Fluff Mode toggle.
- * Set `remem.ZeroFluffMode` to `true` in workspace or user settings to activate.
+ * Set `cuttlehawk.ZeroFluffMode` to `true` in workspace or user settings to activate.
  */
-export const ZERO_FLUFF_MODE_CONFIG_KEY = 'remem.ZeroFluffMode';
+export const ZERO_FLUFF_MODE_CONFIG_KEY = 'cuttlehawk.ZeroFluffMode';
+export const LEGACY_ZERO_FLUFF_MODE_CONFIG_KEY = 'remem.ZeroFluffMode';
+
+/** Resolve an explicitly configured Cuttlehawk value before the ReMem setting. */
+export function resolveZeroFluffMode(
+  setting: { globalValue?: boolean; workspaceValue?: boolean; workspaceFolderValue?: boolean; defaultValue?: boolean } | undefined,
+  effectiveValue: boolean | undefined,
+  legacyValue: boolean | undefined,
+): boolean {
+  const explicit = setting?.workspaceFolderValue ?? setting?.workspaceValue ?? setting?.globalValue;
+  return (explicit === undefined ? legacyValue : effectiveValue ?? explicit) ?? setting?.defaultValue ?? false;
+}
 
 export const ZERO_FLUFF_MODE_HEADER = '## ⚡ ZERO FLUFF MODE ACTIVE';
 

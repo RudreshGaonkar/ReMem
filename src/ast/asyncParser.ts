@@ -286,7 +286,7 @@ export class AsyncASTParser {
       });
 
       this.worker.on('error', (err) => {
-        console.warn('[ReMem AsyncParser] Worker thread error, falling back to non-blocking promises:', err);
+        console.warn('[Cuttlehawk AsyncParser] Worker thread error, falling back to non-blocking promises:', err);
         this.workerAvailable = false;
         this.drainPendingTasks(err);
       });
@@ -297,7 +297,7 @@ export class AsyncASTParser {
         this.drainPendingTasks(new Error('AST worker exited'));
       });
     } catch (err) {
-      console.warn('[ReMem AsyncParser] worker_threads unavailable, using non-blocking promise fallback:', err);
+      console.warn('[Cuttlehawk AsyncParser] worker_threads unavailable, using non-blocking promise fallback:', err);
       this.workerAvailable = false;
     }
   }

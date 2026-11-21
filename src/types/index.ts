@@ -77,7 +77,7 @@ export interface LRUContextEntry {
 }
 
 /**
- * High-level status info for ReMem diagnostics.
+ * High-level status info for Cuttlehawk diagnostics.
  */
 export interface EngineStatus {
   workspaceRoot: string;

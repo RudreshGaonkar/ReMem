@@ -104,7 +104,7 @@ async function retireLock(lock: string, version: string, depth = 0): Promise<voi
   // Each generation has its own guard, including when a reclaimer dies.
   if (depth >= 8) return;
   const key = createHash('sha256').update(lock + '\0' + version).digest('hex');
-  const guard = path.join(path.dirname(lock), '.remem-reclaim-' + key + '.lock');
+  const guard = path.join(path.dirname(lock), '.cuttlehawk-reclaim-' + key + '.lock');
   if (!(await createLock(guard))) {
     const owner = await readLock(guard);
     if (!owner || !isStaleLock(owner)) return;

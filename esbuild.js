@@ -1,4 +1,4 @@
-// esbuild.js — Bundles the ReMem VS Code extension into a single out/extension.js
+// esbuild.js — Bundles the Cuttlehawk VS Code extension into a single out/extension.js
 // WASM files (sql.js, web-tree-sitter) are copied as static assets and cannot be inlined.
 
 const esbuild = require('esbuild');
@@ -37,8 +37,8 @@ copyWasmAssets();
 const mcpOnly = process.argv.includes('--mcp');
 const buildOptions = {
   entryPoints: mcpOnly
-    ? { 'remem-mcp': 'src/mcp/server.ts', 'storage-worker': 'src/database/storageWorker.ts' }
-    : { extension: 'src/extension.ts', 'remem-mcp': 'src/mcp/server.ts', 'storage-worker': 'src/database/storageWorker.ts' },
+    ? { 'cuttlehawk-mcp': 'src/mcp/server.ts', 'storage-worker': 'src/database/storageWorker.ts' }
+    : { extension: 'src/extension.ts', 'cuttlehawk-mcp': 'src/mcp/server.ts', 'storage-worker': 'src/database/storageWorker.ts' },
   bundle: true,
   outdir: 'out',
   external: ['vscode', 'fsevents'],
@@ -46,7 +46,7 @@ const buildOptions = {
   platform: 'node',
   mainFields: ['module', 'main'],
   target: 'node18',
-  define: { REMEM_VERSION: JSON.stringify(require('./package.json').version) },
+  define: { CUTTLEHAWK_VERSION: JSON.stringify(require('./package.json').version) },
   sourcemap: !isProd,
   minify: isProd,
   logLevel: 'warning',
@@ -55,11 +55,11 @@ const buildOptions = {
     name: 'verify-headless-entry',
     setup(build) {
       build.onEnd((result) => {
-        const mcp = result.metafile?.outputs['out/remem-mcp.js'];
+        const mcp = result.metafile?.outputs['out/cuttlehawk-mcp.js'];
         if (mcp?.imports.some((entry) => entry.path === 'vscode')) {
           return { errors: [{ text: 'The MCP bundle must be independent of the editor API.' }] };
         }
-        if (mcp) fs.chmodSync('out/remem-mcp.js', 0o755);
+        if (mcp) fs.chmodSync('out/cuttlehawk-mcp.js', 0o755);
       });
     },
   }],

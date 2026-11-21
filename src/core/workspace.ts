@@ -9,7 +9,7 @@ import { CONFIG } from '../config.js';
  */
 export class WorkspaceIsolationError extends Error {
   constructor(message: string) {
-    super(`[ReMem Workspace Isolation Breach] ${message}`);
+    super(`[Cuttlehawk Workspace Isolation Breach] ${message}`);
     this.name = 'WorkspaceIsolationError';
   }
 }
@@ -17,7 +17,7 @@ export class WorkspaceIsolationError extends Error {
 /**
  * Strict Workspace Isolation Manager
  *
- * Ensures all databases (remem_ledger.sqlite, orama_index.json), knowledge graphs,
+ * Ensures all databases (cuttlehawk_ledger.sqlite, orama_index.json), knowledge graphs,
  * file reads, and AI terminal command executions are strictly scoped to the active
  * workspace folder (vscode.workspace.workspaceFolders[0]).
  *
@@ -46,7 +46,7 @@ export class WorkspaceIsolationManager {
     this._memoryDir = path.join(this._workspaceRoot, CONFIG.MEM_DIR_NAME);
     this._dbPath = path.join(this._memoryDir, CONFIG.DB_FILE_NAME);
     this._vectorIndexPath = path.join(this._memoryDir, CONFIG.VECTOR_INDEX_FILE_NAME);
-    this._contextFeedPath = path.join(this._workspaceRoot, '.remem_context_feed.md');
+    this._contextFeedPath = path.join(this._workspaceRoot, CONFIG.CONTEXT_FEED_FILE_NAME);
     this._scratchpadPath = path.join(this._workspaceRoot, CONFIG.SCRATCHPAD_FILE_NAME);
 
     // Ensure scoped storage directory exists
@@ -176,7 +176,7 @@ export class WorkspaceIsolationManager {
   /**
    * Creates or returns a VS Code terminal strictly sandboxed to the active workspace path as CWD.
    */
-  public createIsolatedTerminal(name: string = 'ReMem AI Agent'): vscode.Terminal {
+  public createIsolatedTerminal(name: string = 'Cuttlehawk AI Agent'): vscode.Terminal {
     return vscode.window.createTerminal({
       name,
       cwd: this._workspaceRoot,

@@ -25,6 +25,7 @@ export const HARDCODED_SECRET_BLOCKLIST: string[] = [
   '*.pkcs12',
   '.antigravityMem/**',
   '.recall_scratchpad.md',
+  '.cuttlehawk_context_feed.md',
   '.remem_context_feed.md',
   '.git/**',
   '.agents/',
@@ -123,6 +124,7 @@ export class SecretShield {
       baseName === 'secrets.json' ||
       baseName.startsWith('id_rsa') ||
       baseName === '.recall_scratchpad.md' ||
+      baseName === '.cuttlehawk_context_feed.md' ||
       baseName === '.remem_context_feed.md'
     ) {
       return true;

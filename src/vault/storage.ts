@@ -27,7 +27,7 @@ export class VaultStorage {
           this.secrets = new Map(parsed.map((item: VaultSecret) => [item.filePath, item]));
         }
       } catch (err) {
-        console.error('[ReMem Vault] Failed to parse vault.json:', err);
+        console.error('[Cuttlehawk Vault] Failed to parse vault.json:', err);
       }
     }
   }

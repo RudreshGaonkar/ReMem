@@ -38,7 +38,7 @@ export class PreBootContextProvider {
     const feedContent = await this.loadContextFeed();
 
     const sections: string[] = [];
-    sections.push('## 🗺️ PRE-BOOT PROJECT ARCHITECTURE MAP (ReMem Graph Engine)');
+    sections.push('## 🗺️ PRE-BOOT PROJECT ARCHITECTURE MAP (Cuttlehawk Graph Engine)');
     sections.push(`> **MANDATORY DIRECTIVE:** ${PREBOOT_AI_INSTRUCTION}`);
     sections.push('');
 
@@ -51,7 +51,7 @@ export class PreBootContextProvider {
 
     const maxFeedCharacters = 6000;
     sections.push(feedContent.trim().slice(0, maxFeedCharacters));
-    if (feedContent.length > maxFeedCharacters) sections.push('See .remem_context_feed.md for the full map.');
+    if (feedContent.length > maxFeedCharacters) sections.push('See .cuttlehawk_context_feed.md for the full map.');
 
     return sections.join('\n');
   }
@@ -142,15 +142,21 @@ export class PreBootContextProvider {
   }
 
   /**
-   * Loads the current .remem_context_feed.md from the isolated workspace root.
+   * Loads the current .cuttlehawk_context_feed.md from the isolated workspace root.
    */
   private async loadContextFeed(): Promise<string> {
-    const feedPath = path.join(this.workspaceRoot, '.remem_context_feed.md');
+    const feedPath = path.join(this.workspaceRoot, '.cuttlehawk_context_feed.md');
+    const legacyFeedPath = path.join(this.workspaceRoot, '.remem_context_feed.md');
 
     if (!isWorkspacePath(this.workspaceRoot, feedPath)) throw new Error('Unsafe context feed path');
     try {
       if (fs.existsSync(feedPath)) {
         const content = await fs.promises.readFile(feedPath, 'utf8');
+        if (content && content.trim().length > 0) {
+          return content;
+        }
+      } else if (fs.existsSync(legacyFeedPath) && isWorkspacePath(this.workspaceRoot, legacyFeedPath)) {
+        const content = await fs.promises.readFile(legacyFeedPath, 'utf8');
         if (content && content.trim().length > 0) {
           return content;
         }
@@ -166,7 +172,7 @@ export class PreBootContextProvider {
       }
     }
 
-    return '# Project Architecture Map not yet generated. Trigger ReMem Re-index.';
+    return '# Project Architecture Map not yet generated. Trigger Cuttlehawk Re-index.';
   }
 
 }

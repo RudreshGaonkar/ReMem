@@ -26,7 +26,7 @@ export class ASTAnalyzer {
       await Parser.init({ wasmBinary, locateFile: () => wasmPath, print: console.error, printErr: console.error });
       this.isParserReady = true;
     } catch (err) {
-      console.warn('[ReMem AST] web-tree-sitter initialization fallback to regex parser:', err);
+      console.warn('[Cuttlehawk AST] web-tree-sitter initialization fallback to regex parser:', err);
       this.isParserReady = false;
     }
   }

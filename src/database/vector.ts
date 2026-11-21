@@ -224,7 +224,7 @@ export class VectorSearchEngine {
         this.fileIdMap.clear();
         this.chunkIdMap.clear();
         this.fileChunksMap.clear();
-        console.error('[ReMem Vector] Failed to restore index, starting fresh:', err);
+        console.error('[Cuttlehawk Vector] Failed to restore index, starting fresh:', err);
       }
     }
     this.version = version;

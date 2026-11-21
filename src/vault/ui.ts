@@ -13,7 +13,7 @@ export async function getOrPromptVaultPassword(
   try {
     return await sessionManager.getOrCreateMasterKey();
   } catch (err) {
-    vscode.window.showWarningMessage(`ReMem: Unable to access native SecretStorage: ${err}`);
+    vscode.window.showWarningMessage(`Cuttlehawk: Unable to access native SecretStorage: ${err}`);
     return null;
   }
 }
@@ -48,7 +48,7 @@ export async function encryptAndStoreSecret(
     storage.storeSecret(secretEntry);
     return true;
   } catch (err) {
-    vscode.window.showErrorMessage(`ReMem: Encryption failed: ${err}`);
+    vscode.window.showErrorMessage(`Cuttlehawk: Encryption failed: ${err}`);
     return false;
   }
 }
@@ -68,7 +68,7 @@ export async function readAndDecryptSecret(
 
   const masterKey = await sessionManager.getMasterKey();
   if (!masterKey) {
-    vscode.window.showWarningMessage('ReMem: Native encryption key could not be retrieved from System Keychain.');
+    vscode.window.showWarningMessage('Cuttlehawk: Native encryption key could not be retrieved from System Keychain.');
     return null;
   }
 
@@ -85,7 +85,7 @@ export async function readAndDecryptSecret(
 
     return decrypted;
   } catch (err) {
-    vscode.window.showErrorMessage('ReMem: Decryption failed. Keychain key mismatch or corrupted ciphertext.');
+    vscode.window.showErrorMessage('Cuttlehawk: Decryption failed. Keychain key mismatch or corrupted ciphertext.');
     return null;
   }
 }

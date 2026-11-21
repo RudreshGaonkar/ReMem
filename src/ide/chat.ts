@@ -11,7 +11,7 @@ export function registerChatParticipant(provider: PreBootContextProvider, contex
     // Check if vscode.chat is supported in the current VS Code API version
     if (typeof (vscode as any).chat?.createChatParticipant === 'function') {
       const participant = (vscode as any).chat.createChatParticipant(
-        'remem',
+        'cuttlehawk',
         async (
           request: any,
           _chatContext: any,
@@ -40,7 +40,7 @@ export function registerChatParticipant(provider: PreBootContextProvider, contex
           }
 
           // Default output: show confirmation and pre-boot architecture map
-          responseStream.markdown(`*(ReMem Knowledge Graph & Architecture Map Pre-Boot Active)*\n\n`);
+          responseStream.markdown(`*(Cuttlehawk Knowledge Graph & Architecture Map Pre-Boot Active)*\n\n`);
           responseStream.markdown(preboot);
           return { metadata: { prebootContext: preboot } };
         }

@@ -86,7 +86,7 @@ export class SummarizerPipeline {
           }
         } catch (vaultErr) {
           // Graceful fallback: non-blocking, indexing proceeds unaffected
-          console.warn('[ReMem Vault] Automated secret encryption fallback:', vaultErr);
+          console.warn('[Cuttlehawk Vault] Automated secret encryption fallback:', vaultErr);
         }
       }
     } else {

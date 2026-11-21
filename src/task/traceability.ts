@@ -8,7 +8,7 @@ import { shouldIgnorePath } from '../config.js';
 /**
  * Lean Traceability Tracker
  * Parses import and export statements on file save, registers module dependencies
- * in SQLite remem_ledger, and provides Ripple Effect Warnings to alert agents of downstream breaking changes.
+ * in SQLite cuttlehawk_ledger, and provides Ripple Effect Warnings to alert agents of downstream breaking changes.
  */
 export class LeanTraceabilityTracker {
   private workspaceRoot: string;
@@ -93,7 +93,7 @@ export class LeanTraceabilityTracker {
   }
 
   /**
-   * Processes a saved file: parses imports/exports and persists dependencies into SQLite remem_ledger.
+   * Processes a saved file: parses imports/exports and persists dependencies into SQLite cuttlehawk_ledger.
    */
   public async processSavedFile(
     filePath: string,
@@ -115,7 +115,7 @@ export class LeanTraceabilityTracker {
         }
       }
 
-      // Record in SQLite remem_ledger
+      // Record in SQLite cuttlehawk_ledger
       await this.dbManager.sqlite.recordFileGraph(filePath, resolvedDependencies, exports);
 
       // Sync into in-memory ASTAnalyzer if attached
@@ -193,7 +193,7 @@ export class LeanTraceabilityTracker {
   }
 
   /**
-   * Performs an initial scan of workspace files to seed dependencies in SQLite remem_ledger.
+   * Performs an initial scan of workspace files to seed dependencies in SQLite cuttlehawk_ledger.
    */
   public async scanWorkspace(maxFiles: number = 500): Promise<number> {
     let processed = 0;

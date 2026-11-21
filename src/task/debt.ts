@@ -4,8 +4,10 @@ import * as vscode from 'vscode';
 import { ScratchpadManager } from '../ast/scratchpad.js';
 import { shouldIgnorePath } from '../config.js';
 
-export const TECH_DEBT_MARKER_START = '<!-- REMEM_TECH_DEBT_START -->';
-export const TECH_DEBT_MARKER_END = '<!-- REMEM_TECH_DEBT_END -->';
+export const TECH_DEBT_MARKER_START = '<!-- CUTTLEHAWK_TECH_DEBT_START -->';
+export const TECH_DEBT_MARKER_END = '<!-- CUTTLEHAWK_TECH_DEBT_END -->';
+export const LEGACY_TECH_DEBT_MARKER_START = '<!-- REMEM_TECH_DEBT_START -->';
+export const LEGACY_TECH_DEBT_MARKER_END = '<!-- REMEM_TECH_DEBT_END -->';
 
 const MAX_SCAN_FILE_SIZE_BYTES = 1024 * 1024; // 1 MB cap
 
@@ -20,7 +22,7 @@ export interface TechDebtItem {
   filePath: string;
   relativePath: string;
   line: number;
-  tag: 'remem-debt' | 'TODO';
+  tag: 'cuttlehawk-debt' | 'remem-debt' | 'TODO';
   description: string;
   snippet: string;
 }
@@ -35,7 +37,7 @@ export interface TechDebtScanResult {
 
 /**
  * Tech Debt Ledger (Lean Engine)
- * Scans workspace files for comments prefixed with `// remem-debt:` or `// TODO:`
+ * Scans workspace files for comments prefixed with `// cuttlehawk-debt:`, `// remem-debt:`, or `// TODO:`
  * and appends/updates a structured summary table into `.recall_scratchpad.md`.
  */
 export class TechDebtLedger {
@@ -61,9 +63,9 @@ export class TechDebtLedger {
     const items: TechDebtItem[] = [];
     const filesWithDebtSet = new Set<string>();
 
-    // Regex matching comments prefixed with // remem-debt: or // TODO:
+    // Regex matching comments prefixed with // cuttlehawk-debt:, // remem-debt: or // TODO:
     // Also accommodates # and /* for multi-language flexibility
-    const debtRegex = /(?:\/\/|#|\/\*)\s*(remem-debt|TODO)\s*:\s*(.*)/i;
+    const debtRegex = /(?:\/\/|#|\/\*)\s*(cuttlehawk-debt|remem-debt|TODO)\s*:\s*(.*)/i;
 
     for (const filePath of filePaths) {
       try {
@@ -81,7 +83,8 @@ export class TechDebtLedger {
           const match = lineText.match(debtRegex);
           if (match) {
             const rawTag = match[1].toLowerCase();
-            const tag: 'remem-debt' | 'TODO' = rawTag === 'remem-debt' ? 'remem-debt' : 'TODO';
+            const tag: 'cuttlehawk-debt' | 'remem-debt' | 'TODO' =
+              rawTag === 'cuttlehawk-debt' ? 'cuttlehawk-debt' : rawTag === 'remem-debt' ? 'remem-debt' : 'TODO';
             let description = match[2].trim();
             // Clean trailing comment closures e.g. */
             description = description.replace(/\*\/$/, '').trim();
@@ -195,7 +198,7 @@ export class TechDebtLedger {
     ];
 
     if (items.length === 0) {
-      lines.push('*No active technical debt shortcuts (`// remem-debt:`) or `// TODO:` comments found in workspace.*');
+      lines.push('*No active technical debt shortcuts (`// cuttlehawk-debt:`) or `// TODO:` comments found in workspace.*');
     } else {
       lines.push('| Tag | File | Line | Tracked Shortcut / Debt Description |');
       lines.push('| :--- | :--- | :---: | :--- |');
@@ -203,7 +206,7 @@ export class TechDebtLedger {
       for (const item of items) {
         // Escape pipe characters in description for valid markdown tables
         const escapedDesc = item.description.replace(/\|/g, '\\|');
-        const tagBadge = item.tag === 'remem-debt' ? '`remem-debt`' : '`TODO`';
+        const tagBadge = item.tag === 'cuttlehawk-debt' ? '`cuttlehawk-debt`' : item.tag === 'remem-debt' ? '`remem-debt`' : '`TODO`';
         lines.push(`| ${tagBadge} | \`${item.relativePath}\` | ${item.line} | ${escapedDesc} |`);
       }
     }
@@ -221,23 +224,29 @@ export class TechDebtLedger {
       const debtBlock = scanResult.markdownTable;
 
       let updatedContent = '';
-      if (currentContent.includes(TECH_DEBT_MARKER_START) && currentContent.includes(TECH_DEBT_MARKER_END)) {
-        const startIndex = currentContent.indexOf(TECH_DEBT_MARKER_START);
-        const endIndex = currentContent.indexOf(TECH_DEBT_MARKER_END) + TECH_DEBT_MARKER_END.length;
+      let startIndex = currentContent.indexOf(TECH_DEBT_MARKER_START);
+      let endIndex = currentContent.indexOf(TECH_DEBT_MARKER_END);
+      let endLen = TECH_DEBT_MARKER_END.length;
+      if (startIndex < 0 && currentContent.indexOf(LEGACY_TECH_DEBT_MARKER_START) >= 0) {
+        startIndex = currentContent.indexOf(LEGACY_TECH_DEBT_MARKER_START);
+        endIndex = currentContent.indexOf(LEGACY_TECH_DEBT_MARKER_END);
+        endLen = LEGACY_TECH_DEBT_MARKER_END.length;
+      }
+      if (startIndex >= 0 && endIndex >= 0) {
         updatedContent =
           currentContent.substring(0, startIndex) +
           debtBlock +
-          currentContent.substring(endIndex);
+          currentContent.substring(endIndex + endLen);
       } else {
         updatedContent = currentContent.trim() + '\n\n' + debtBlock + '\n';
       }
 
       await this.scratchpad.updatePlan(updatedContent);
       this.outputChannel?.appendLine(
-        `[ReMem Tech Debt] Appended/updated Tech Debt Ledger in .recall_scratchpad.md (${scanResult.totalItems} items).`
+        `[Cuttlehawk Tech Debt] Appended/updated Tech Debt Ledger in .recall_scratchpad.md (${scanResult.totalItems} items).`
       );
     } catch (err) {
-      this.outputChannel?.appendLine(`[ReMem Tech Debt] Failed to update scratchpad: ${err}`);
+      this.outputChannel?.appendLine(`[Cuttlehawk Tech Debt] Failed to update scratchpad: ${err}`);
     }
   }
 

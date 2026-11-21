@@ -37,7 +37,7 @@ export class VaultSessionManager {
       .update(workspaceRoot, 'utf8')
       .digest('hex')
       .substring(0, 16);
-    this.secretKeyName = `remem.vault.key.${workspaceHash}`;
+    this.secretKeyName = `cuttlehawk.vault.key.${workspaceHash}`;
   }
 
   /**
@@ -55,7 +55,15 @@ export class VaultSessionManager {
 
     // 2. Attempt retrieval from VS Code native SecretStorage (OS Keychain)
     try {
-      const storedKey = await this.secretStorage.get(this.secretKeyName);
+      let storedKey = await this.secretStorage.get(this.secretKeyName);
+      if (!storedKey || storedKey.trim().length === 0) {
+        const legacyKeyName = `remem.vault.key.${this.secretKeyName.split('.').pop()}`;
+        const legacyKey = await this.secretStorage.get(legacyKeyName);
+        if (legacyKey && legacyKey.trim().length > 0) {
+          storedKey = legacyKey;
+          await this.secretStorage.store(this.secretKeyName, storedKey);
+        }
+      }
       if (storedKey && storedKey.trim().length > 0) {
         this.cacheKeyInMemory(storedKey);
         return storedKey;
@@ -66,13 +74,13 @@ export class VaultSessionManager {
       await this.secretStorage.store(this.secretKeyName, newKey);
       this.cacheKeyInMemory(newKey);
       this.outputChannel?.appendLine(
-        `[ReMem Vault] Initialized new workspace encryption key in native System Keychain.`
+        `[Cuttlehawk Vault] Initialized new workspace encryption key in native System Keychain.`
       );
       return newKey;
     } catch (err) {
       // 4. Fallback: If OS keychain throws/declines, use an ephemeral in-memory key
       this.outputChannel?.appendLine(
-        `[ReMem Vault] Native SecretStorage access unavailable (${err}). Falling back to ephemeral in-memory key.`
+        `[Cuttlehawk Vault] Native SecretStorage access unavailable (${err}). Falling back to ephemeral in-memory key.`
       );
       if (!this.ephemeralFallbackKey) {
         this.ephemeralFallbackKey = crypto.randomBytes(32).toString('hex');
@@ -165,7 +173,7 @@ export class VaultSessionManager {
     this.ephemeralFallbackKey = null;
     try {
       await this.secretStorage.delete(this.secretKeyName);
-      this.outputChannel?.appendLine(`[ReMem Vault] Wiped workspace key from native SecretStorage.`);
+      this.outputChannel?.appendLine(`[Cuttlehawk Vault] Wiped workspace key from native SecretStorage.`);
     } catch {
       // Non-fatal
     }
@@ -184,7 +192,7 @@ export class VaultSessionManager {
       try {
         listener(isUnlocked);
       } catch (err) {
-        console.error('[ReMem Vault] Error in listener callback:', err);
+        console.error('[Cuttlehawk Vault] Error in listener callback:', err);
       }
     }
   }

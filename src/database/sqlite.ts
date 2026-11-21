@@ -67,13 +67,13 @@ export class SqliteLedger {
               // Keep the original in place until the replacement is ready.
               await beforePublish();
               await fs.promises.copyFile(this.dbFilePath, this.dbFilePath + '.corrupted-' + randomUUID(), fs.constants.COPYFILE_EXCL);
-              console.error('[ReMem SQLite] Recovered a damaged ledger at', this.dbFilePath);
+              console.error('[Cuttlehawk SQLite] Recovered a damaged ledger at', this.dbFilePath);
             }
             await publishAtomic(this.dbFilePath, snapshot, beforePublish);
             try {
               await publishAtomic(this.dbFilePath + '.bak', snapshot, beforePublish);
             } catch (error) {
-              if (!this.shutdown.signal.aborted) console.error('[ReMem SQLite] Could not update the recovery copy:', error);
+              if (!this.shutdown.signal.aborted) console.error('[Cuttlehawk SQLite] Could not update the recovery copy:', error);
             }
             return result.values;
           }, this.shutdown.signal);

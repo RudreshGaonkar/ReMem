@@ -82,7 +82,7 @@ export async function assembleContext(
   const { activeFilePath, activeBranch = 'main' } = options;
   const sections: string[] = [];
 
-  sections.push('# 🧠 REMEM TOKEN-OPTIMIZED CONTEXT INJECTION');
+  sections.push('# 🧠 CUTTLEHAWK TOKEN-OPTIMIZED CONTEXT INJECTION');
 
   // ── Zero Fluff Mode Protocol ──────────────────────────────────────────────
   // When Zero Fluff Mode is enabled this block takes precedence — injected first so

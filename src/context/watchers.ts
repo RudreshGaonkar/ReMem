@@ -29,10 +29,11 @@ export function isLoopInducingOrInternalPath(filePath: string): boolean {
 
   const p = filePath.replace(/\\/g, '/');
 
-  // Strict guard clauses required for ReMem Anti-Loop File Watcher
+  // Strict guard clauses required for Cuttlehawk Anti-Loop File Watcher
   if (
     p.includes('.antigravityMem') ||
     p.includes('.recall_scratchpad.md') ||
+    p.includes('.cuttlehawk_context_feed.md') ||
     p.includes('.remem_context_feed.md')
   ) {
     return true;
@@ -55,7 +56,7 @@ export function isLoopInducingOrInternalPath(filePath: string): boolean {
  * Anti-Loop File Watcher
  *
  * Implements strict guard clauses to prevent self-triggering loops from internal
- * files (.antigravityMem, .recall_scratchpad.md, .remem_context_feed.md) and applies
+ * files (.antigravityMem, .recall_scratchpad.md, .cuttlehawk_context_feed.md) and applies
  * a strict 1200ms debounce across document saves to prevent CPU spikes.
  */
 export function setupAntiLoopFileWatcher(
@@ -67,13 +68,15 @@ export function setupAntiLoopFileWatcher(
   graphEngine?: KnowledgeGraphEngine,
   syncTasks?: () => Promise<unknown>,
 ): { add(file: string): void; stop(): Promise<void> } {
-  const report = (error: unknown) => outputChannel?.appendLine(`[ReMem Watcher] ${error}`);
+  const report = (error: unknown) => outputChannel?.appendLine(`[Cuttlehawk Watcher] ${error}`);
   const queue = new WorkspaceWorkQueue(async (files, signal, overflow) => {
     if (overflow) {
       report('Event capacity exceeded, rescanning the workspace');
       await indexWorkspace(dbManager.rootPath, dbManager, pipeline, outputChannel, traceabilityTracker, signal);
     }
-    const enabled = vscode.workspace.getConfiguration('remem').get<boolean>('enableAutoSummarize', true);
+    const config = vscode.workspace.getConfiguration('cuttlehawk');
+    const legacyConfig = vscode.workspace.getConfiguration('remem');
+    const enabled = config.get<boolean>('enableAutoSummarize', legacyConfig.get<boolean>('enableAutoSummarize', true));
     const indexedFiles = enabled ? files : files.filter((file) => !fs.existsSync(file));
     for (let offset = 0; offset < indexedFiles.length; offset += 16) {
       signal.throwIfAborted();

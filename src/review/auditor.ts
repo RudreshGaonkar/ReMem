@@ -49,19 +49,19 @@ export class LocalDiffAuditor {
   public async auditDiff(spec?: SpecFileReport | null): Promise<DiffAuditReport | null> {
     const gitDir = path.join(this.workspaceRoot, '.git');
     if (!fs.existsSync(gitDir)) {
-      this.outputChannel?.appendLine('[ReMem Auditor] No .git directory found. Diff audit requires Git.');
-      this.notify?.('ReMem Diff Auditor: No Git repository detected. Diff audit is unavailable.');
+      this.outputChannel?.appendLine('[Cuttlehawk Auditor] No .git directory found. Diff audit requires Git.');
+      this.notify?.('Cuttlehawk Diff Auditor: No Git repository detected. Diff audit is unavailable.');
       return null;
     }
 
     try {
       const isRepo = await this.git.checkIsRepo();
       if (!isRepo) {
-        this.notify?.('ReMem Diff Auditor: Workspace is not a Git repository.');
+        this.notify?.('Cuttlehawk Diff Auditor: Workspace is not a Git repository.');
         return null;
       }
     } catch (err) {
-      this.outputChannel?.appendLine(`[ReMem Auditor] Git check failed: ${err}`);
+      this.outputChannel?.appendLine(`[Cuttlehawk Auditor] Git check failed: ${err}`);
       return null;
     }
 
@@ -88,14 +88,14 @@ export class LocalDiffAuditor {
         rawDiff = await this.git.diff();
       }
     } catch (err) {
-      this.outputChannel?.appendLine(`[ReMem Auditor] Error gathering git diff: ${err}`);
-      this.notify?.(`ReMem Diff Auditor: Could not read Git diff: ${err}`, true);
+      this.outputChannel?.appendLine(`[Cuttlehawk Auditor] Error gathering git diff: ${err}`);
+      this.notify?.(`Cuttlehawk Diff Auditor: Could not read Git diff: ${err}`, true);
       return null;
     }
 
     if (!diffSummary || diffSummary.files.length === 0) {
-      this.outputChannel?.appendLine('[ReMem Auditor] Working tree is clean. No active or staged changes to audit.');
-      this.notify?.('ReMem Diff Auditor: Working tree is clean. No active changes found.');
+      this.outputChannel?.appendLine('[Cuttlehawk Auditor] Working tree is clean. No active or staged changes to audit.');
+      this.notify?.('Cuttlehawk Diff Auditor: Working tree is clean. No active changes found.');
       return null;
     }
 
@@ -359,7 +359,7 @@ export class LocalDiffAuditor {
         regex: /\beyJ[a-zA-Z0-9_-]{10,}\.eyJ[a-zA-Z0-9_-]{10,}\.[a-zA-Z0-9._-]{10,}\b/,
         label: 'Hardcoded JWT token in source code',
         severity: 'error' as const,
-        message: 'Literal JWT token found in source code. Hardcoded credentials or tokens must never be committed. Store in ReMem Vault or environment variables.',
+        message: 'Literal JWT token found in source code. Hardcoded credentials or tokens must never be committed. Store in Cuttlehawk Vault or environment variables.',
       },
       {
         regex: /(?:jwt\.sign|jwt\.verify)\s*\([^,]+,\s*['"`][^'"`]{3,}['"`]/,
@@ -371,7 +371,7 @@ export class LocalDiffAuditor {
         regex: /(?:jwt_secret|jwtSecret|jwt_key|jwtKey|token_secret|tokenSecret)\s*[:=]\s*['"][^'"]{4,}['"]/,
         label: 'Hardcoded JWT secret assignment',
         severity: 'error' as const,
-        message: 'Hardcoded JWT secret variable detected. Move secret keys to environment variables or the ReMem Vault.',
+        message: 'Hardcoded JWT secret variable detected. Move secret keys to environment variables or the Cuttlehawk Vault.',
       },
     ];
 
@@ -455,7 +455,7 @@ export class LocalDiffAuditor {
           line: item.lineNum,
           type: 'emoji_violation',
           severity: 'error',
-          message: `Unicode emoji "${match[0]}" rejected in source code. ReMem strict style rule enforces standard UI icon libraries (e.g. Lucide, Codicons, FontAwesome) instead of raw emojis in source files.`,
+          message: `Unicode emoji "${match[0]}" rejected in source code. Cuttlehawk strict style rule enforces standard UI icon libraries (e.g. Lucide, Codicons, FontAwesome) instead of raw emojis in source files.`,
           snippet: item.text.trim().substring(0, 100),
         });
       }
@@ -666,7 +666,7 @@ export class LocalDiffAuditor {
 
     const sections: string[] = [];
 
-    sections.push('# ReMem Local Diff Audit');
+    sections.push('# Cuttlehawk Local Diff Audit');
     sections.push(`> Automated structural checklist & blast radius review generated locally at ${new Date().toLocaleTimeString()}.\n`);
 
     sections.push('## 📊 Overview');
@@ -784,7 +784,7 @@ export class LocalDiffAuditor {
       sections.push('');
     }
 
-    sections.push('---\n*Audit executed 100% locally by ReMem without external API calls.*');
+    sections.push('---\n*Audit executed 100% locally by Cuttlehawk without external API calls.*');
 
     return sections.join('\n');
   }

@@ -75,7 +75,7 @@ export class GitStateWatcher {
     const gitDir = path.join(this.workspaceRoot, '.git');
     if (!fs.existsSync(gitDir)) {
       this.outputChannel?.appendLine(
-        `[ReMem Git] No .git directory found at ${this.workspaceRoot}. Git ledger standing by.`
+        `[Cuttlehawk Git] No .git directory found at ${this.workspaceRoot}. Git ledger standing by.`
       );
       return;
     }
@@ -93,7 +93,7 @@ export class GitStateWatcher {
       this.lastCommitHash = log?.latest?.hash || '';
 
       this.outputChannel?.appendLine(
-        `[ReMem Git] Initialized Git watcher on branch "${this.currentBranch}" (${this.lastCommitHash.substring(0, 7)})`
+        `[Cuttlehawk Git] Initialized Git watcher on branch "${this.currentBranch}" (${this.lastCommitHash.substring(0, 7)})`
       );
 
       // Snapshot what files are currently tracked so we can diff after a pull
@@ -119,7 +119,7 @@ export class GitStateWatcher {
       this.remoteSyncWatcher.onDidCreate(() => this.handleRemoteSyncEvent());
       context.subscriptions.push(this.remoteSyncWatcher);
     } catch (err) {
-      this.outputChannel?.appendLine(`[ReMem Git Error] Failed to initialize git tracker: ${err}`);
+      this.outputChannel?.appendLine(`[Cuttlehawk Git Error] Failed to initialize git tracker: ${err}`);
     }
   }
 
@@ -145,7 +145,7 @@ export class GitStateWatcher {
         if (this.currentBranch && this.currentBranch !== newBranch && this.currentBranch !== 'HEAD') {
           const oldBranch = this.currentBranch;
           this.outputChannel?.appendLine(
-            `[ReMem Git] Branch transition detected: "${oldBranch}" -> "${newBranch}"`
+            `[Cuttlehawk Git] Branch transition detected: "${oldBranch}" -> "${newBranch}"`
           );
 
           // Update branch state before showing prompt
@@ -165,7 +165,7 @@ export class GitStateWatcher {
           this.lastCommitHash = newCommitHash;
         }
       } catch (err) {
-        this.outputChannel?.appendLine(`[ReMem Git Error] Error checking git status: ${err}`);
+        this.outputChannel?.appendLine(`[Cuttlehawk Git Error] Error checking git status: ${err}`);
       }
     }, 600);
   }
@@ -187,7 +187,7 @@ export class GitStateWatcher {
         if (this.remoteSweep) this.rerunRemoteSweep = true;
         else await this.runRemoteSyncSweep(true);
       } catch (err) {
-        this.outputChannel?.appendLine(`[ReMem Git Sync Error] Remote sync sweep failed: ${err}`);
+        this.outputChannel?.appendLine(`[Cuttlehawk Git Sync Error] Remote sync sweep failed: ${err}`);
       }
     }, 1200);
   }
@@ -217,7 +217,7 @@ export class GitStateWatcher {
 
     if (!this.pipeline) {
       this.outputChannel?.appendLine(
-        `[ReMem Git Sync] No pipeline attached – skipping auto-summarization.`
+        `[Cuttlehawk Git Sync] No pipeline attached – skipping auto-summarization.`
       );
       return result;
     }
@@ -236,7 +236,7 @@ export class GitStateWatcher {
     }
 
     this.outputChannel?.appendLine(
-      `[ReMem Git Sync] Remote changes detected — ${changedFiles.length} file(s) to review.`
+      `[Cuttlehawk Git Sync] Remote changes detected — ${changedFiles.length} file(s) to review.`
     );
 
     if (background && this.enqueueFile) {
@@ -253,7 +253,7 @@ export class GitStateWatcher {
           result.skippedCount++;
         }
       } catch (error) {
-        this.outputChannel?.appendLine(`[ReMem Git Sync] Could not index ${filePath}: ${error}`);
+        this.outputChannel?.appendLine(`[Cuttlehawk Git Sync] Could not index ${filePath}: ${error}`);
       }
     };
     for (let offset = 0; offset < changedFiles.length; offset += 16) {
@@ -266,11 +266,11 @@ export class GitStateWatcher {
     if (result.summarizedCount > 0) {
       await this.dbManager.flushToDisk();
       this.outputChannel?.appendLine(
-        `[ReMem Git Sync] Sync complete — ${result.summarizedCount} file(s) summarized, ` +
+        `[Cuttlehawk Git Sync] Sync complete — ${result.summarizedCount} file(s) summarized, ` +
           `${result.skippedCount} unchanged.`
       );
       vscode.window.showInformationMessage(
-        `ReMem: Teammate changes synced — ${result.summarizedCount} file(s) auto-summarized.`
+        `Cuttlehawk: Teammate changes synced — ${result.summarizedCount} file(s) auto-summarized.`
       );
     }
 

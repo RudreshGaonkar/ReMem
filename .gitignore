@@ -3,6 +3,7 @@ out/
 dist/
 .antigravityMem/
 .recall_scratchpad.md
+.cuttlehawk_context_feed.md
 .remem_context_feed.md
 *.vsix
 .vscode-test/
@@ -11,6 +12,7 @@ dist/
 antigravity_extension.md
 Explanation.md
 
+.agents/cuttlehawk-runtime/
 .agents/remem-runtime/
 
 AGENTS.md

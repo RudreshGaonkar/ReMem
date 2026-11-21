@@ -6,8 +6,10 @@ import { shouldIgnorePath, getMemoryDirPath } from '../config.js';
 import { ChecklistItem, PhaseInfo, SpecFileReport } from '../types/index.js';
 
 const MAX_SPEC_SIZE_BYTES = 1024 * 1024; // 1 MB cap
-const SYNC_START = '<!-- REMEM_SYNCED_SPEC_START -->';
-const SYNC_END = '<!-- REMEM_SYNCED_SPEC_END -->';
+const SYNC_START = '<!-- CUTTLEHAWK_SYNCED_SPEC_START -->';
+const SYNC_END = '<!-- CUTTLEHAWK_SYNCED_SPEC_END -->';
+const LEGACY_SYNC_START = '<!-- REMEM_SYNCED_SPEC_START -->';
+const LEGACY_SYNC_END = '<!-- REMEM_SYNCED_SPEC_END -->';
 
 /**
  * Spec & Task Sync Engine
@@ -96,7 +98,7 @@ export class SpecTaskTracker {
       const stat = fs.statSync(filePath);
       if (stat.size > MAX_SPEC_SIZE_BYTES) {
         this.outputChannel?.appendLine(
-          `[ReMem Spec Tracker] File ${filePath} exceeds 1 MB limit (${(stat.size / 1024).toFixed(0)} KB). Skipping parse.`
+          `[Cuttlehawk Spec Tracker] File ${filePath} exceeds 1 MB limit (${(stat.size / 1024).toFixed(0)} KB). Skipping parse.`
         );
         return null;
       }
@@ -230,7 +232,7 @@ export class SpecTaskTracker {
         nextPendingTask,
       };
     } catch (err) {
-      this.outputChannel?.appendLine(`[ReMem Spec Tracker] Error parsing spec ${filePath}: ${err}`);
+      this.outputChannel?.appendLine(`[Cuttlehawk Spec Tracker] Error parsing spec ${filePath}: ${err}`);
       return null;
     }
   }
@@ -243,7 +245,7 @@ export class SpecTaskTracker {
     if (specFiles.length === 0) {
       this.latestReport = null;
       if (showNotification) {
-        this.notify?.('ReMem Task Tracker: No spec or checklist files found in workspace.');
+        this.notify?.('Cuttlehawk Task Tracker: No spec or checklist files found in workspace.');
       }
       return null;
     }
@@ -268,12 +270,12 @@ export class SpecTaskTracker {
     // Persist a snapshot copy into .antigravityMem/task_progress.json for safe indexing
     this.persistReportToMem(report);
 
-    const logMsg = `[ReMem Spec Tracker] Synced ${report.relativePath}: ${report.completedTasks}/${report.totalTasks} tasks complete (${report.percentage}%). Active phase: "${report.activePhase?.title || 'None'}".`;
+    const logMsg = `[Cuttlehawk Spec Tracker] Synced ${report.relativePath}: ${report.completedTasks}/${report.totalTasks} tasks complete (${report.percentage}%). Active phase: "${report.activePhase?.title || 'None'}".`;
     this.outputChannel?.appendLine(logMsg);
 
     if (showNotification) {
       this.notify?.(
-        `ReMem: Synced spec progress from "${report.relativePath}" (${report.completedTasks}/${report.totalTasks} complete, ${report.percentage}%).`
+        `Cuttlehawk: Synced spec progress from "${report.relativePath}" (${report.completedTasks}/${report.totalTasks} complete, ${report.percentage}%).`
       );
     }
 
@@ -308,20 +310,26 @@ export class SpecTaskTracker {
       const syncedBlock = syncedLines.join('\n');
 
       await this.scratchpad.editPlan((currentContent) => {
-        const first = currentContent.indexOf(SYNC_START);
-        const last = currentContent.indexOf(SYNC_END);
+        let first = currentContent.indexOf(SYNC_START);
+        let last = currentContent.indexOf(SYNC_END);
+        let endLen = SYNC_END.length;
+        if (first < 0 && currentContent.indexOf(LEGACY_SYNC_START) >= 0) {
+          first = currentContent.indexOf(LEGACY_SYNC_START);
+          last = currentContent.indexOf(LEGACY_SYNC_END);
+          endLen = LEGACY_SYNC_END.length;
+        }
         if (first >= 0 && last > first) {
-          return currentContent.slice(0, first) + syncedBlock + currentContent.slice(last + SYNC_END.length);
+          return currentContent.slice(0, first) + syncedBlock + currentContent.slice(last + endLen);
         }
         return currentContent.trimEnd() + '\n\n' + syncedBlock + '\n';
       });
     } catch (err) {
-      this.outputChannel?.appendLine(`[ReMem Spec Tracker] Error updating scratchpad sync section: ${err}`);
+      this.outputChannel?.appendLine(`[Cuttlehawk Spec Tracker] Error updating scratchpad sync section: ${err}`);
     }
   }
 
   /**
-   * Formats active build phase and task context for prompt injection in remem.getContext.
+   * Formats active build phase and task context for prompt injection in cuttlehawk.getContext.
    */
   public getActiveTaskContext(): string {
     const report = this.latestReport;

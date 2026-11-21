@@ -1,5 +1,6 @@
+import * as fs from 'fs';
 import * as path from 'path';
-import { isWorkspacePath } from '../core/files.js';
+import { isWorkspacePath, fileVersion, publishAtomic, withAsyncFileLock } from '../core/files.js';
 import { SecretShield } from '../core/ignore.js';
 import { CONFIG, getDbFilePath, getMemoryDirPath } from '../config.js';
 import { ASTChunk, ErrorLedgerEntry, FileSummary } from '../types/index.js';
@@ -23,7 +24,7 @@ export class DatabaseManager {
    * Initializes both the SQLite and Vector database instances inside .antigravityMem/.
    *
    * Session recovery behaviour:
-   *  • If `remem_ledger.sqlite` already exists on disk it is loaded as-is so all
+   *  • If `cuttlehawk_ledger.sqlite` (or legacy `remem_ledger.sqlite`) already exists on disk it is loaded as-is so all
    *    previously indexed summaries survive an IDE restart.
    *  • If `orama_index.json` already exists on disk the Orama vector index is
    *    re-hydrated from the persisted snapshot (handled inside VectorSearchEngine.initialize).
@@ -33,9 +34,27 @@ export class DatabaseManager {
     this.workspaceRoot = workspaceRoot;
     const memDir = getMemoryDirPath(workspaceRoot);
     const dbPath = getDbFilePath(workspaceRoot);
+    const legacyDbPath = path.join(memDir, CONFIG.LEGACY_DB_FILE_NAME);
     const vectorIndexPath = path.join(memDir, CONFIG.VECTOR_INDEX_FILE_NAME);
-    if (![dbPath, vectorIndexPath].every((file) => isWorkspacePath(workspaceRoot, file))) {
-      throw new Error('Unsafe workspace database path.');
+    const safePaths = () => [dbPath, dbPath + '.bak', legacyDbPath, legacyDbPath + '.bak', vectorIndexPath]
+      .every((file) => isWorkspacePath(workspaceRoot, file));
+    if (!safePaths()) throw new Error('Unsafe workspace database path.');
+    if (!fileVersion(dbPath) && fileVersion(legacyDbPath)) {
+      await withAsyncFileLock(dbPath, async (assertOwner) => {
+        if (fileVersion(dbPath)) return;
+        await withAsyncFileLock(legacyDbPath, async (assertLegacyOwner) => {
+          if (!safePaths()) throw new Error('Unsafe workspace database path.');
+          if (!fileVersion(legacyDbPath)) return;
+          const snapshot = await fs.promises.readFile(legacyDbPath);
+          const backup = fileVersion(legacyDbPath + '.bak') ? await fs.promises.readFile(legacyDbPath + '.bak') : undefined;
+          const beforePublish = async () => {
+            await assertLegacyOwner();
+            await assertOwner();
+          };
+          if (backup) await publishAtomic(dbPath + '.bak', backup, beforePublish);
+          await publishAtomic(dbPath, snapshot, beforePublish);
+        });
+      });
     }
     SecretShield.getInstance(workspaceRoot);
 

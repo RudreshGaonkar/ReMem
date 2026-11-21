@@ -24,7 +24,7 @@ async function initTreeSitter(): Promise<boolean> {
     isParserInitialized = true;
     return true;
   } catch (err) {
-    console.error('[ReMem AST] Could not initialize tree-sitter:', err);
+    console.error('[Cuttlehawk AST] Could not initialize tree-sitter:', err);
     return false;
   }
 }

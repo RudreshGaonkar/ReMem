@@ -5,9 +5,12 @@ export const CONFIG = {
   // Folder & File Names
   MEM_DIR_NAME: '.antigravityMem',
   SCRATCHPAD_FILE_NAME: '.recall_scratchpad.md',
-  DB_FILE_NAME: 'remem_ledger.sqlite',
+  DB_FILE_NAME: 'cuttlehawk_ledger.sqlite',
+  LEGACY_DB_FILE_NAME: 'remem_ledger.sqlite',
+  CONTEXT_FEED_FILE_NAME: '.cuttlehawk_context_feed.md',
+  LEGACY_CONTEXT_FEED_FILE_NAME: '.remem_context_feed.md',
   VECTOR_INDEX_FILE_NAME: 'orama_index.json',
-  OUTPUT_CHANNEL_NAME: 'ReMem Engine',
+  OUTPUT_CHANNEL_NAME: 'Cuttlehawk Engine',
 
   // Limits & Timeouts
   VAULT_CACHE_TIMEOUT_MS: 60 * 60 * 1000, // 1 hour in milliseconds
@@ -66,6 +69,7 @@ export function shouldIgnorePath(filePath: string): boolean {
     /[\\/]\.vscode-test([\\/]|$)/i,
     /[\\/]\.DS_Store$/i,
     /[\\/]\.recall_scratchpad\.md$/i,
+    /[\\/]\.cuttlehawk_context_feed\.md$/i,
     /[\\/]\.remem_context_feed\.md$/i,
   ];
 

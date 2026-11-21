@@ -25,7 +25,7 @@ export type ScratchpadChangeCallback = (newContent: string) => void;
 type SessionState = Parameters<DatabaseManager['saveSessionState']>[0];
 
 const defaultPlan = [
-  '# ReMem Active Scratchpad',
+  '# Cuttlehawk Active Scratchpad',
   '',
   '## Current Plan & Subtasks',
   '',
@@ -188,15 +188,25 @@ export class ScratchpadManager {
   }
 
   public async saveCheckpoint(db: DatabaseManager, state: SessionState): Promise<void> {
-    const start = '<!-- remem:checkpoint -->';
-    const end = '<!-- /remem:checkpoint -->';
+    const start = '<!-- cuttlehawk:checkpoint -->';
+    const end = '<!-- /cuttlehawk:checkpoint -->';
+    const legacyStart = '<!-- remem:checkpoint -->';
+    const legacyEnd = '<!-- /remem:checkpoint -->';
     await this.editPlan((current) => {
-      const first = current.indexOf(start);
-      const last = current.indexOf(end);
+      let first = current.indexOf(start);
+      let last = current.indexOf(end);
+      let markerEnd = end;
+      if (first < 0 && current.indexOf(legacyStart) >= 0) {
+        first = current.indexOf(legacyStart);
+        last = current.indexOf(legacyEnd);
+        markerEnd = legacyEnd;
+      }
       if ((first >= 0 || last >= 0) && (first < 0 || last <= first)) {
         throw new Error('Malformed scratchpad checkpoint markers.');
       }
-      const clean = (value: string) => value.replaceAll(start, '').replaceAll(end, '');
+      const clean = (value: string) => value
+        .replaceAll(start, '').replaceAll(end, '')
+        .replaceAll(legacyStart, '').replaceAll(legacyEnd, '');
       const list = (task: string) => clean(task).replace(/\s+/g, ' ');
       const block = [
         start,
@@ -208,7 +218,7 @@ export class ScratchpadManager {
         end,
       ].join('\n');
       return first < 0 ? current.trimEnd() + '\n\n' + block + '\n'
-        : current.slice(0, first) + block + current.slice(last + end.length);
+        : current.slice(0, first) + block + current.slice(last + markerEnd.length);
     }, async () => {
       await db.saveSessionState({ ...state, timestamp: Math.max(Date.now(), fs.statSync(this.scratchpadPath).mtimeMs) });
     });
