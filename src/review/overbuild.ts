@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { ASTAnalyzer } from '../ast/analyzer.js';
 import { DiffIssue } from '../types/index.js';
+import { isWorkspacePath } from '../core/files.js';
 import { shouldIgnorePath } from '../config.js';
 
 const NODE_BUILTINS = new Set([
@@ -76,7 +77,7 @@ export class OverbuildAuditor {
       const relPath = fileItem.file;
       const fullPath = path.resolve(this.workspaceRoot, relPath);
 
-      if (shouldIgnorePath(fullPath)) {
+      if (!isWorkspacePath(this.workspaceRoot, fullPath) || shouldIgnorePath(fullPath)) {
         continue;
       }
 

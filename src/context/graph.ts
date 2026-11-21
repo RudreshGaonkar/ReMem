@@ -2,10 +2,11 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { DatabaseManager } from '../database/index.js';
 import { ASTAnalyzer } from '../ast/analyzer.js';
-import { WorkspaceIsolationManager } from '../core/workspace.js';
+import { publishAtomic, isWorkspacePath, withAsyncFileLock } from '../core/files.js';
+import { shouldIgnorePath } from '../config.js';
 
 /**
- * Persistent Knowledge Graph Engine ("Graphify" Feature)
+ * Persistent Knowledge Graph Engine
  *
  * Extracts dependency and symbol mapping from the isolated SQLite ledger (remem_ledger.sqlite)
  * and AST analyzer, compressing it into a token-efficient architecture map persisted at
@@ -28,10 +29,13 @@ export class KnowledgeGraphEngine {
   /**
    * Generates the highly compressed project architecture map string.
    */
-  public generateCompressedArchitectureMap(): string {
-    const dependencies = this.dbManager.getAllDependencies();
-    const exports = this.dbManager.getAllExports();
-    const summaries = this.dbManager.sqlite ? this.dbManager.sqlite.getAllFileSummaries() : [];
+  public async generateCompressedArchitectureMap(): Promise<string> {
+    const sqlite = this.dbManager.sqlite;
+    const [dependencies, exports, summaries] = await Promise.all([
+      sqlite.query('getAllDependencies'),
+      sqlite.query('getAllExports'),
+      sqlite.query('getAllFileSummaries'),
+    ]);
 
     // Map: relative file path -> { imports: Set<string>, exports: Set<string>, summary?: string }
     const fileGraph = new Map<
@@ -121,9 +125,6 @@ export class KnowledgeGraphEngine {
 
     lines.push('# 🗺️ REMEM PERSISTENT KNOWLEDGE GRAPH (`.remem_context_feed.md`)');
     lines.push(`> Project: \`${projectName}\` | Synced: ${timestamp} | Nodes: ${totalNodes} | Edges: ${totalEdges}`);
-    lines.push(
-      '> Directive: You have received the project architecture map. Do not run commands to scan or analyze the workspace files. Rely strictly on this map and the local Orama search.'
-    );
     lines.push('');
     lines.push('## 📦 MODULE TOPOLOGY & EXPORTED SYMBOLS');
 
@@ -170,31 +171,25 @@ export class KnowledgeGraphEngine {
   /**
    * Updates `.remem_context_feed.md` silently in the background.
    */
-  public async updateContextFeedSilently(): Promise<string> {
-    try {
-      const content = this.generateCompressedArchitectureMap();
-      const feedPath = path.join(this.workspaceRoot, '.remem_context_feed.md');
-
-      // Use WorkspaceIsolationManager if available for safe path assertion
-      const isolation = WorkspaceIsolationManager.getInstance();
-      if (isolation) {
-        await isolation.writeWorkspaceFile(feedPath, content);
-      } else {
-        await fs.promises.writeFile(feedPath, content, 'utf8');
-      }
-
+  public async updateContextFeedSilently(signal?: AbortSignal): Promise<string> {
+    const feedPath = path.join(this.workspaceRoot, '.remem_context_feed.md');
+    return withAsyncFileLock(feedPath, async (assertOwner) => {
+      if (!isWorkspacePath(this.workspaceRoot, feedPath)) throw new Error('Unsafe context feed path');
+      const content = await this.generateCompressedArchitectureMap();
+      await publishAtomic(feedPath, content, async () => {
+        signal?.throwIfAborted();
+        await assertOwner();
+      });
       return content;
-    } catch (err) {
-      // Background silent failure: never pop up intrusive error alerts
-      return '';
-    }
+    }, signal);
   }
 
   /**
    * Reads or generates the current context feed content.
    */
-  public async getOrGenerateContextFeed(): Promise<string> {
+  public async getOrGenerateContextFeed(persistIfMissing = true): Promise<string> {
     const feedPath = path.join(this.workspaceRoot, '.remem_context_feed.md');
+    if (!isWorkspacePath(this.workspaceRoot, feedPath)) throw new Error('Unsafe context feed path');
     try {
       if (fs.existsSync(feedPath)) {
         return await fs.promises.readFile(feedPath, 'utf8');
@@ -202,20 +197,11 @@ export class KnowledgeGraphEngine {
     } catch {
       // Fall through to generation
     }
-    return await this.updateContextFeedSilently();
+    return persistIfMissing ? this.updateContextFeedSilently() : this.generateCompressedArchitectureMap();
   }
 
   private isInternalOrSpecial(relPath: string): boolean {
-    const p = relPath.replace(/\\/g, '/');
-    return (
-      p.startsWith('.antigravityMem') ||
-      p.includes('.recall_scratchpad.md') ||
-      p.includes('.remem_context_feed.md') ||
-      p.startsWith('.git') ||
-      p.startsWith('node_modules') ||
-      p.startsWith('out') ||
-      p.startsWith('dist')
-    );
+    const file = path.resolve(this.workspaceRoot, relPath);
+    return !isWorkspacePath(this.workspaceRoot, file) || shouldIgnorePath(file) || !fs.existsSync(file);
   }
 }
-

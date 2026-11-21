@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { DatabaseManager } from '../database/index.js';
 import { ASTAnalyzer } from '../ast/analyzer.js';
+import { isWorkspacePath } from '../core/files.js';
 import { shouldIgnorePath } from '../config.js';
 
 /**
@@ -106,7 +107,7 @@ export class LeanTraceabilityTracker {
       const resolvedDependencies: { importedFile: string; importStatement?: string }[] = [];
       for (const rawImport of rawImports) {
         const resolved = this.resolveImportPath(filePath, rawImport);
-        if (resolved) {
+        if (resolved && isWorkspacePath(this.workspaceRoot, resolved) && !shouldIgnorePath(resolved)) {
           resolvedDependencies.push({
             importedFile: resolved,
             importStatement: rawImport,
@@ -115,18 +116,14 @@ export class LeanTraceabilityTracker {
       }
 
       // Record in SQLite remem_ledger
-      this.dbManager.sqlite.recordDependencies(filePath, resolvedDependencies);
-      this.dbManager.sqlite.recordExports(
-        filePath,
-        exports.map((sym) => ({ symbol: sym }))
-      );
+      await this.dbManager.sqlite.recordFileGraph(filePath, resolvedDependencies, exports);
 
       // Sync into in-memory ASTAnalyzer if attached
       if (this.astAnalyzer) {
-        this.astAnalyzer.processFileDependencies(filePath);
+        this.astAnalyzer.processFileDependencies(filePath, content);
       }
 
-      const dependents = this.getDependents(filePath);
+      const dependents = await this.getDependents(filePath);
 
       return {
         imports: resolvedDependencies.map((d) => d.importedFile),
@@ -141,15 +138,20 @@ export class LeanTraceabilityTracker {
   /**
    * Retrieves all workspace files that depend on (import) the specified file from SQLite.
    */
-  public getDependents(filePath: string): string[] {
-    const sqliteDependents = this.dbManager.sqlite.getDependentsForFile(filePath);
+  public forgetFile(filePath: string): void {
+    this.astAnalyzer?.forgetFile(filePath);
+  }
+
+  public async getDependents(filePath: string): Promise<string[]> {
+    const sqliteDependents = await this.dbManager.sqlite.query('getDependentsForFile', filePath);
     if (sqliteDependents.length > 0) {
       return sqliteDependents;
     }
 
     // Fallback to in-memory ASTAnalyzer if SQLite records were not yet seeded
     if (this.astAnalyzer) {
-      return this.astAnalyzer.getDependentFiles(filePath);
+      return this.astAnalyzer.getDependentFiles(filePath).filter((file) =>
+        fs.existsSync(file) && isWorkspacePath(this.workspaceRoot, file) && !shouldIgnorePath(file));
     }
 
     return [];
@@ -159,8 +161,8 @@ export class LeanTraceabilityTracker {
    * Generates a "Ripple Effect Warning" block for context injection.
    * Warns the AI coding agent about downstream dependents that could break.
    */
-  public generateRippleEffectWarning(filePath: string): string | null {
-    const dependents = this.getDependents(filePath);
+  public async generateRippleEffectWarning(filePath: string): Promise<string | null> {
+    const dependents = await this.getDependents(filePath);
     if (!dependents || dependents.length === 0) {
       return null;
     }

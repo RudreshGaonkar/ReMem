@@ -13,6 +13,7 @@ import { KnowledgeGraphEngine } from '../context/graph.js';
 
 export interface AssembleContextOptions {
   activeFilePath?: string;
+  zeroFluffMode?: boolean;
   activeBranch?: string;
   currentTurn?: number;
   maxTurnAge?: number;
@@ -86,7 +87,7 @@ export async function assembleContext(
   // ── Zero Fluff Mode Protocol ──────────────────────────────────────────────
   // When Zero Fluff Mode is enabled this block takes precedence — injected first so
   // the AI model sees the execution-only directive before any other context.
-  const zeroFluffBlock = getZeroFluffModeContext();
+  const zeroFluffBlock = getZeroFluffModeContext(options.zeroFluffMode);
   if (zeroFluffBlock) {
     sections.push(`\n${zeroFluffBlock}`);
   }
@@ -97,7 +98,8 @@ export async function assembleContext(
       options.preBootProvider ||
       new PreBootContextProvider(
         scratchpad.rootPath,
-        options.graphEngine || new KnowledgeGraphEngine(scratchpad.rootPath, dbManager, astAnalyzer)
+        options.graphEngine || new KnowledgeGraphEngine(scratchpad.rootPath, dbManager, astAnalyzer),
+        dbManager
       );
     try {
       const prebootBlock = await preboot.getPreBootSystemPrompt();
@@ -125,7 +127,7 @@ export async function assembleContext(
     }
   }
 
-  // 3. Active Build Phase & Spec Milestones (Zero Fluff Mode Pattern)
+  // 3. Active Build Phase & Spec Milestones
   if (options.taskTracker) {
     const taskContext = options.taskTracker.getActiveTaskContext();
     if (taskContext) {
@@ -136,19 +138,19 @@ export async function assembleContext(
   }
 
   // 4. Active Scratchpad Plan
-  const plan = scratchpad.getPlan().trim();
+  const plan = (await scratchpad.getPlanAsync()).trim().slice(0, 2400);
   if (plan) {
     sections.push(`\n## 🎯 ACTIVE EXECUTION PLAN (.recall_scratchpad.md)\n${plan}`);
   }
 
   // 5. Active File Summary & Relevant AST Chunks
   if (activeFilePath) {
-    const activeSummary = dbManager.getFileSummary(activeFilePath);
+    const activeSummary = await dbManager.sqlite.query('getFileSummary', activeFilePath);
     const relPath = path.relative(scratchpad.rootPath, activeFilePath);
 
     sections.push(`\n## 📄 ACTIVE FILE CONTEXT (\`${relPath}\`)`);
     if (activeSummary) {
-      sections.push(`- **Summary:** ${activeSummary.summary}`);
+      sections.push(`- **Summary:** ${activeSummary.summary.slice(0, 1200)}`);
       sections.push(`- **Estimated Tokens:** ~${activeSummary.tokenCountEstimate} | **Encrypted:** ${activeSummary.isEncrypted}`);
     } else {
       sections.push(`- **File:** \`${relPath}\` (Unindexed or new file)`);
@@ -168,7 +170,7 @@ export async function assembleContext(
           const linesLabel = chunk.startLine ? ` (lines ${chunk.startLine}-${chunk.endLine})` : '';
           sections.push(`\n### ${chunk.kind.toUpperCase()}: \`${chunk.name}\`${linesLabel}`);
           sections.push('```typescript');
-          sections.push(chunk.content);
+          sections.push(chunk.content.slice(0, 1600));
           sections.push('```');
         }
       }
@@ -180,7 +182,7 @@ export async function assembleContext(
     const tracker =
       options.traceabilityTracker ||
       new LeanTraceabilityTracker(scratchpad.rootPath, dbManager, astAnalyzer);
-    const rippleWarning = tracker.generateRippleEffectWarning(activeFilePath);
+    const rippleWarning = await tracker.generateRippleEffectWarning(activeFilePath);
     if (rippleWarning) {
       sections.push(`\n${rippleWarning}`);
     } else {
@@ -190,7 +192,7 @@ export async function assembleContext(
         sections.push(`\n## 💥 AST BLAST RADIUS (Files that import this module)`);
         for (const depPath of blastRadius.dependents.slice(0, 5)) {
           const depRel = path.relative(scratchpad.rootPath, depPath);
-          const depSummary = dbManager.getFileSummary(depPath);
+          const depSummary = await dbManager.sqlite.query('getFileSummary', depPath);
           const summaryText = depSummary ? `: ${depSummary.summary}` : '';
           sections.push(`- \`${depRel}\`${summaryText}`);
         }
@@ -202,7 +204,7 @@ export async function assembleContext(
   }
 
   // 8. Git Branch & Rollback Error Ledger
-  const errorWarnings = getFormattedErrorContext(dbManager, activeFilePath, activeBranch);
+  const errorWarnings = await getFormattedErrorContext(dbManager, activeFilePath, activeBranch);
   if (errorWarnings) {
     sections.push(`\n## ⚠️ PAST ATTEMPTS & ERROR LEDGER\n${errorWarnings}`);
   }

@@ -215,7 +215,7 @@ export class TechDebtLedger {
   /**
    * Appends or replaces the tech debt ledger section in .recall_scratchpad.md.
    */
-  public updateScratchpadWithDebt(scanResult: TechDebtScanResult): void {
+  public async updateScratchpadWithDebt(scanResult: TechDebtScanResult): Promise<void> {
     try {
       const currentContent = this.scratchpad.getPlan();
       const debtBlock = scanResult.markdownTable;
@@ -232,7 +232,7 @@ export class TechDebtLedger {
         updatedContent = currentContent.trim() + '\n\n' + debtBlock + '\n';
       }
 
-      this.scratchpad.updatePlan(updatedContent);
+      await this.scratchpad.updatePlan(updatedContent);
       this.outputChannel?.appendLine(
         `[ReMem Tech Debt] Appended/updated Tech Debt Ledger in .recall_scratchpad.md (${scanResult.totalItems} items).`
       );
@@ -246,7 +246,7 @@ export class TechDebtLedger {
    */
   public async collectAndRecordDebt(): Promise<TechDebtScanResult> {
     const result = await this.scanWorkspace();
-    this.updateScratchpadWithDebt(result);
+    await this.updateScratchpadWithDebt(result);
     return result;
   }
 }

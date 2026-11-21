@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import * as vscode from 'vscode';
+import { isWorkspacePath } from '../core/files.js';
+import type { SpecFileReport } from '../types/index.js';
 import { SimpleGit, simpleGit } from 'simple-git';
 import { DatabaseManager } from '../database/index.js';
 import { ASTAnalyzer } from '../ast/analyzer.js';
@@ -12,7 +13,7 @@ import { OverbuildAuditor } from './overbuild.js';
 const MAX_FILE_SIZE_BYTES = 1024 * 1024; // 1 MB limit for safe inspections
 
 /**
- * Local Diff Auditor (CodeRabbit Pattern)
+ * Local Diff Auditor
  * Inspects active git working tree and staged diffs, cross-references AST dependencies
  * and Orama vector context, and flags leftover debug markers, syntax/import flaws, and style breaches.
  */
@@ -22,14 +23,16 @@ export class LocalDiffAuditor {
   private astAnalyzer: ASTAnalyzer;
   private scratchpad: ScratchpadManager;
   private git: SimpleGit;
-  private outputChannel?: vscode.OutputChannel;
+  private outputChannel?: { appendLine(message: string): void };
+  private notify?: (message: string, warning?: boolean) => void;
 
   constructor(
     workspaceRoot: string,
     dbManager: DatabaseManager,
     astAnalyzer: ASTAnalyzer,
     scratchpad: ScratchpadManager,
-    outputChannel?: vscode.OutputChannel
+    outputChannel?: { appendLine(message: string): void },
+    notify?: (message: string, warning?: boolean) => void
   ) {
     this.workspaceRoot = workspaceRoot;
     this.dbManager = dbManager;
@@ -37,23 +40,24 @@ export class LocalDiffAuditor {
     this.scratchpad = scratchpad;
     this.git = simpleGit(workspaceRoot);
     this.outputChannel = outputChannel;
+    this.notify = notify;
   }
 
   /**
    * Executes a complete local diff audit and returns a structured report.
    */
-  public async auditDiff(): Promise<DiffAuditReport | null> {
+  public async auditDiff(spec?: SpecFileReport | null): Promise<DiffAuditReport | null> {
     const gitDir = path.join(this.workspaceRoot, '.git');
     if (!fs.existsSync(gitDir)) {
       this.outputChannel?.appendLine('[ReMem Auditor] No .git directory found. Diff audit requires Git.');
-      vscode.window.showInformationMessage('ReMem Diff Auditor: No Git repository detected. Diff audit is unavailable.');
+      this.notify?.('ReMem Diff Auditor: No Git repository detected. Diff audit is unavailable.');
       return null;
     }
 
     try {
       const isRepo = await this.git.checkIsRepo();
       if (!isRepo) {
-        vscode.window.showInformationMessage('ReMem Diff Auditor: Workspace is not a Git repository.');
+        this.notify?.('ReMem Diff Auditor: Workspace is not a Git repository.');
         return null;
       }
     } catch (err) {
@@ -85,13 +89,13 @@ export class LocalDiffAuditor {
       }
     } catch (err) {
       this.outputChannel?.appendLine(`[ReMem Auditor] Error gathering git diff: ${err}`);
-      vscode.window.showWarningMessage(`ReMem Diff Auditor: Could not read Git diff: ${err}`);
+      this.notify?.(`ReMem Diff Auditor: Could not read Git diff: ${err}`, true);
       return null;
     }
 
     if (!diffSummary || diffSummary.files.length === 0) {
       this.outputChannel?.appendLine('[ReMem Auditor] Working tree is clean. No active or staged changes to audit.');
-      vscode.window.showInformationMessage('ReMem Diff Auditor: Working tree is clean. No active changes found.');
+      this.notify?.('ReMem Diff Auditor: Working tree is clean. No active changes found.');
       return null;
     }
 
@@ -109,7 +113,7 @@ export class LocalDiffAuditor {
       const fullPath = path.resolve(this.workspaceRoot, relPath);
 
       // Skip internal/ignored directories
-      if (shouldIgnorePath(fullPath)) {
+      if (!isWorkspacePath(this.workspaceRoot, fullPath) || shouldIgnorePath(fullPath)) {
         continue;
       }
 
@@ -196,7 +200,8 @@ export class LocalDiffAuditor {
       diffSummary,
       filesAuditedCount,
       issues,
-      blastRadiusSummaries
+      blastRadiusSummaries,
+      spec
     );
 
     const report: DiffAuditReport = {
@@ -652,7 +657,8 @@ export class LocalDiffAuditor {
     diffSummary: any,
     auditedCount: number,
     issues: DiffIssue[],
-    blastSummaries: { file: string; dependentsCount: number; dependents: string[] }[]
+    blastSummaries: { file: string; dependentsCount: number; dependents: string[] }[],
+    spec?: SpecFileReport | null
   ): string {
     const errorCount = issues.filter((i) => i.severity === 'error').length;
     const warningCount = issues.filter((i) => i.severity === 'warning').length;
@@ -660,7 +666,7 @@ export class LocalDiffAuditor {
 
     const sections: string[] = [];
 
-    sections.push('# 🐰 ReMem Local Diff Audit (CodeRabbit Pattern)');
+    sections.push('# ReMem Local Diff Audit');
     sections.push(`> Automated structural checklist & blast radius review generated locally at ${new Date().toLocaleTimeString()}.\n`);
 
     sections.push('## 📊 Overview');
@@ -668,6 +674,13 @@ export class LocalDiffAuditor {
     sections.push(`- **Files Changed in Git**: ${diffSummary.files.length} (${diffSummary.insertions} additions, ${diffSummary.deletions} deletions)`);
     sections.push(`- **Files Audited**: ${auditedCount} (safety capped at <= 1 MB)`);
     sections.push(`- **Audit Findings**: ${errorCount} error(s), ${warningCount} warning(s), ${infoCount} informational hint(s)\n`);
+
+    if (spec?.totalTasks) {
+      sections.push('## Spec checklist');
+      sections.push(`- \`${spec.relativePath}\` records ${spec.completedTasks} of ${spec.totalTasks} completed tasks.`);
+      if (spec.nextPendingTask) sections.push(`- [ ] ${spec.nextPendingTask.text}`);
+      sections.push('- Verify checklist completion against the changes and test results.\n');
+    }
 
     if (issues.length === 0) {
       sections.push('### ✅ Clean Bill of Health');

@@ -1,6 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import * as vscode from 'vscode';
+import { atomicWrite, isWorkspacePath } from '../core/files.js';
 import { ScratchpadManager } from '../ast/scratchpad.js';
 import { shouldIgnorePath, getMemoryDirPath } from '../config.js';
 import { ChecklistItem, PhaseInfo, SpecFileReport } from '../types/index.js';
@@ -10,26 +10,30 @@ const SYNC_START = '<!-- REMEM_SYNCED_SPEC_START -->';
 const SYNC_END = '<!-- REMEM_SYNCED_SPEC_END -->';
 
 /**
- * Spec & Task Sync Engine (Zero Fluff Mode Pattern)
+ * Spec & Task Sync Engine
  * Discovers spec and progress markdown files, extracts phase checklists,
  * syncs active build state into .recall_scratchpad.md, and locks AI context to the current milestone.
  */
 export class SpecTaskTracker {
   private workspaceRoot: string;
   private scratchpad: ScratchpadManager;
-  private outputChannel?: vscode.OutputChannel;
+  private outputChannel?: { appendLine(message: string): void };
+  private notify?: (message: string) => void;
   private latestReport: SpecFileReport | null = null;
 
-  constructor(workspaceRoot: string, scratchpad: ScratchpadManager, outputChannel?: vscode.OutputChannel) {
+  constructor(workspaceRoot: string, scratchpad: ScratchpadManager, outputChannel?: { appendLine(message: string): void }, notify?: (message: string) => void) {
     this.workspaceRoot = workspaceRoot;
     this.scratchpad = scratchpad;
     this.outputChannel = outputChannel;
+    this.notify = notify;
   }
 
   /**
    * Scans workspace root and docs directories to locate spec or progress tracker files.
    */
-  public findSpecFiles(): string[] {
+  public async findSpecFiles(): Promise<string[]> {
+    const deadline = performance.now() + 1000;
+    let remaining = 20_000;
     const candidateFiles: { filePath: string; priority: number }[] = [];
     const searchDirs = [this.workspaceRoot];
 
@@ -55,8 +59,9 @@ export class SpecTaskTracker {
 
     for (const dir of searchDirs) {
       try {
-        const entries = fs.readdirSync(dir, { withFileTypes: true });
-        for (const entry of entries) {
+        const entries = await fs.promises.opendir(dir);
+        for await (const entry of entries) {
+          if (--remaining < 0 || performance.now() >= deadline) break;
           if (!entry.isFile()) continue;
 
           const fullPath = path.join(dir, entry.name);
@@ -85,7 +90,7 @@ export class SpecTaskTracker {
    * Parses markdown checklist items and phase headings from a given spec file.
    */
   public parseSpecFile(filePath: string): SpecFileReport | null {
-    if (!fs.existsSync(filePath)) return null;
+    if (!isWorkspacePath(this.workspaceRoot, filePath) || !fs.existsSync(filePath)) return null;
 
     try {
       const stat = fs.statSync(filePath);
@@ -234,10 +239,11 @@ export class SpecTaskTracker {
    * Discovers the best spec file, calculates progress, updates .recall_scratchpad.md, and caches the report.
    */
   public async syncProgress(showNotification: boolean = false): Promise<SpecFileReport | null> {
-    const specFiles = this.findSpecFiles();
+    const specFiles = await this.findSpecFiles();
     if (specFiles.length === 0) {
+      this.latestReport = null;
       if (showNotification) {
-        vscode.window.showInformationMessage('ReMem Task Tracker: No spec or checklist files found in workspace.');
+        this.notify?.('ReMem Task Tracker: No spec or checklist files found in workspace.');
       }
       return null;
     }
@@ -245,6 +251,7 @@ export class SpecTaskTracker {
     const primarySpecPath = specFiles[0];
     const report = this.parseSpecFile(primarySpecPath);
     if (!report) {
+      this.latestReport = null;
       return null;
     }
 
@@ -255,7 +262,7 @@ export class SpecTaskTracker {
     const isScratchpadItself = path.resolve(primarySpecPath) === path.resolve(scratchpadPath);
 
     if (!isScratchpadItself && report.totalTasks > 0) {
-      this.updateScratchpadSyncedSection(report);
+      await this.updateScratchpadSyncedSection(report);
     }
 
     // Persist a snapshot copy into .antigravityMem/task_progress.json for safe indexing
@@ -265,7 +272,7 @@ export class SpecTaskTracker {
     this.outputChannel?.appendLine(logMsg);
 
     if (showNotification) {
-      vscode.window.showInformationMessage(
+      this.notify?.(
         `ReMem: Synced spec progress from "${report.relativePath}" (${report.completedTasks}/${report.totalTasks} complete, ${report.percentage}%).`
       );
     }
@@ -276,9 +283,8 @@ export class SpecTaskTracker {
   /**
    * Injects or updates the demarcated synchronized section in .recall_scratchpad.md without modifying user notes.
    */
-  private updateScratchpadSyncedSection(report: SpecFileReport): void {
+  private async updateScratchpadSyncedSection(report: SpecFileReport): Promise<void> {
     try {
-      const currentContent = this.scratchpad.getPlan();
       const pendingItems = report.activePhase
         ? report.activePhase.items.filter((item) => !item.completed).slice(0, 5)
         : [];
@@ -301,19 +307,14 @@ export class SpecTaskTracker {
 
       const syncedBlock = syncedLines.join('\n');
 
-      let updatedContent = '';
-      if (currentContent.includes(SYNC_START) && currentContent.includes(SYNC_END)) {
-        const startIndex = currentContent.indexOf(SYNC_START);
-        const endIndex = currentContent.indexOf(SYNC_END) + SYNC_END.length;
-        updatedContent =
-          currentContent.substring(0, startIndex) +
-          syncedBlock +
-          currentContent.substring(endIndex);
-      } else {
-        updatedContent = currentContent.trim() + '\n\n' + syncedBlock + '\n';
-      }
-
-      this.scratchpad.updatePlan(updatedContent);
+      await this.scratchpad.editPlan((currentContent) => {
+        const first = currentContent.indexOf(SYNC_START);
+        const last = currentContent.indexOf(SYNC_END);
+        if (first >= 0 && last > first) {
+          return currentContent.slice(0, first) + syncedBlock + currentContent.slice(last + SYNC_END.length);
+        }
+        return currentContent.trimEnd() + '\n\n' + syncedBlock + '\n';
+      });
     } catch (err) {
       this.outputChannel?.appendLine(`[ReMem Spec Tracker] Error updating scratchpad sync section: ${err}`);
     }
@@ -371,7 +372,7 @@ export class SpecTaskTracker {
       const memDir = getMemoryDirPath(this.workspaceRoot);
       if (fs.existsSync(memDir)) {
         const targetPath = path.join(memDir, 'task_progress.json');
-        fs.writeFileSync(targetPath, JSON.stringify(report, null, 2), 'utf8');
+        atomicWrite(targetPath, JSON.stringify(report, null, 2));
       }
     } catch {
       // Non-fatal cache write

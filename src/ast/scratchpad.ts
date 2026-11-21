@@ -1,4 +1,6 @@
 import * as fs from 'fs';
+import { publishAtomic, fileVersion, isWorkspacePath, withAsyncFileLock } from '../core/files.js';
+import type { DatabaseManager } from '../database/index.js';
 import { getScratchpadPath } from '../config.js';
 
 /**
@@ -20,15 +22,26 @@ export type ScratchpadChangeCallback = (newContent: string) => void;
 /**
  * Manages the active workspace scratchpad (.recall_scratchpad.md).
  */
+type SessionState = Parameters<DatabaseManager['saveSessionState']>[0];
+
+const defaultPlan = [
+  '# ReMem Active Scratchpad',
+  '',
+  '## Current Plan & Subtasks',
+  '',
+  '## Working Notes & Hypotheses',
+  '',
+].join('\n');
+
 export class ScratchpadManager {
   private workspaceRoot: string;
   private scratchpadPath: string;
+  private readonly shutdown = new AbortController();
   private changeCallbacks: ScratchpadChangeCallback[] = [];
 
   constructor(workspaceRoot: string) {
     this.workspaceRoot = workspaceRoot;
     this.scratchpadPath = getScratchpadPath(workspaceRoot);
-    this.ensureScratchpad();
   }
 
   /**
@@ -41,37 +54,21 @@ export class ScratchpadManager {
   }
 
   /**
-   * Ensures the scratchpad file exists with a default template.
-   */
-  public ensureScratchpad(): string {
-    if (!fs.existsSync(this.scratchpadPath)) {
-      const initialTemplate = [
-        '# 📝 ReMem Active Scratchpad',
-        '',
-        '> This hidden file tracks multi-step AI execution plans, context notes, and active subtasks.',
-        '',
-        '## 🎯 Current Plan & Subtasks',
-        '- [ ] Step 1: ',
-        '- [ ] Step 2: ',
-        '',
-        '## 💡 Working Notes & Hypotheses',
-        '- ',
-      ].join('\n');
-
-      fs.writeFileSync(this.scratchpadPath, initialTemplate, 'utf8');
-    }
-    return this.scratchpadPath;
-  }
-
-  /**
    * Reads the active scratchpad plan.
    */
   public getPlan(): string {
-    this.ensureScratchpad();
     try {
       return fs.readFileSync(this.scratchpadPath, 'utf8');
     } catch {
-      return '';
+      return defaultPlan;
+    }
+  }
+
+  public async getPlanAsync(): Promise<string> {
+    try {
+      return await fs.promises.readFile(this.scratchpadPath, 'utf8');
+    } catch {
+      return defaultPlan;
     }
   }
 
@@ -80,8 +77,18 @@ export class ScratchpadManager {
    * Fires registered `onContentChange` callbacks so session state can be
    * persisted to SQLite for cross-model resumption (Universal Session State).
    */
-  public updatePlan(content: string): void {
-    fs.writeFileSync(this.scratchpadPath, content, 'utf8');
+  public async updatePlan(content: string): Promise<void> {
+    await this.editPlan(() => content);
+  }
+
+  public async editPlan(edit: (current: string) => string, afterWrite?: () => Promise<void>): Promise<void> {
+    const content = await withAsyncFileLock(this.scratchpadPath, async (assertOwner) => {
+      const current = fileVersion(this.scratchpadPath) ? await fs.promises.readFile(this.scratchpadPath, 'utf8') : defaultPlan;
+      const next = edit(current);
+      if (next !== current || !fileVersion(this.scratchpadPath)) await publishAtomic(this.scratchpadPath, next, assertOwner);
+      await afterWrite?.();
+      return next;
+    }, this.shutdown.signal);
     // Notify session-state listeners of the change
     for (const cb of this.changeCallbacks) {
       try { cb(content); } catch { /* non-fatal */ }
@@ -91,20 +98,15 @@ export class ScratchpadManager {
   /**
    * Appends a new checklist task to the scratchpad plan.
    */
-  public appendTask(task: string): void {
-    const current = this.getPlan();
-    const updated = `${current.trim()}\n- [ ] ${task}\n`;
-    this.updatePlan(updated);
+  public async appendTask(task: string): Promise<void> {
+    await this.editPlan((current) => `${current.trim()}\n- [ ] ${task}\n`);
   }
 
   /**
    * Resets the scratchpad to default template.
    */
-  public clearPlan(): void {
-    if (fs.existsSync(this.scratchpadPath)) {
-      fs.unlinkSync(this.scratchpadPath);
-    }
-    this.ensureScratchpad();
+  public async clearPlan(): Promise<void> {
+    await this.updatePlan(defaultPlan);
   }
 
   // ─── Session persistence & recovery ────────────────────────────────────────
@@ -146,20 +148,74 @@ export class ScratchpadManager {
    *    written back (useful when callers persist content via VS Code globalState).
    *  • Otherwise the default template is written and the method returns `false`.
    */
-  public restoreState(previousContent?: string): boolean {
-    if (fs.existsSync(this.scratchpadPath)) {
-      // Already present on disk – state is intact
-      return true;
-    }
+  public async restoreState(previousContent?: string): Promise<boolean> {
+    if (!isWorkspacePath(this.workspaceRoot, this.scratchpadPath)) throw new Error('Unsafe scratchpad path.');
+    return withAsyncFileLock(this.scratchpadPath, async (assertOwner) => {
+      if (fileVersion(this.scratchpadPath)) return true;
+      await publishAtomic(this.scratchpadPath, previousContent?.trim() ? previousContent : defaultPlan, assertOwner);
+      return Boolean(previousContent?.trim());
+    }, this.shutdown.signal);
+  }
 
-    if (previousContent && previousContent.trim().length > 0) {
-      fs.writeFileSync(this.scratchpadPath, previousContent, 'utf8');
-      return true;
-    }
+  public async syncSessionState(db: DatabaseManager, activeFilePath?: string): Promise<void> {
+    await withAsyncFileLock(this.scratchpadPath, async (assertOwner) => {
+      if (!fileVersion(this.scratchpadPath)) {
+        await publishAtomic(this.scratchpadPath, defaultPlan, assertOwner);
+        return;
+      }
+      const timestamp = fs.statSync(this.scratchpadPath).mtimeMs;
+      const saved = await db.sqlite.query('getCurrentSessionState');
+      if (saved && saved.timestamp >= timestamp) return;
+      const content = await fs.promises.readFile(this.scratchpadPath, 'utf8');
+      if (content === defaultPlan) return;
+      const completedTasks: string[] = [];
+      const pendingTasks: string[] = [];
+      for (const match of content.matchAll(/^\s*[-*+]\s+\[([ xX])\]\s+([^\r\n]+)$/gm)) {
+        const task = match[2].trim();
+        if (task && !/^Step \d+:$/.test(task)) {
+          (match[1] === ' ' ? pendingTasks : completedTasks).push(task);
+        }
+      }
+      await db.saveSessionState({
+        activeTask: pendingTasks[0],
+        completedTasks,
+        pendingTasks,
+        lastPlanSnapshot: content.slice(0, 1200),
+        activeFilePath,
+        timestamp,
+      });
+    }, this.shutdown.signal);
+  }
 
-    // Nothing to restore – write the default template
-    this.ensureScratchpad();
-    return false;
+  public async saveCheckpoint(db: DatabaseManager, state: SessionState): Promise<void> {
+    const start = '<!-- remem:checkpoint -->';
+    const end = '<!-- /remem:checkpoint -->';
+    await this.editPlan((current) => {
+      const first = current.indexOf(start);
+      const last = current.indexOf(end);
+      if ((first >= 0 || last >= 0) && (first < 0 || last <= first)) {
+        throw new Error('Malformed scratchpad checkpoint markers.');
+      }
+      const clean = (value: string) => value.replaceAll(start, '').replaceAll(end, '');
+      const list = (task: string) => clean(task).replace(/\s+/g, ' ');
+      const block = [
+        start,
+        '## Session checkpoint',
+        ...(state.activeTask ? ['Active task: ' + list(state.activeTask)] : []),
+        ...(state.completedTasks ?? []).map((task) => '- [x] ' + list(task)),
+        ...(state.pendingTasks ?? []).map((task) => '- [ ] ' + list(task)),
+        clean(state.lastPlanSnapshot),
+        end,
+      ].join('\n');
+      return first < 0 ? current.trimEnd() + '\n\n' + block + '\n'
+        : current.slice(0, first) + block + current.slice(last + end.length);
+    }, async () => {
+      await db.saveSessionState({ ...state, timestamp: Math.max(Date.now(), fs.statSync(this.scratchpadPath).mtimeMs) });
+    });
+  }
+
+  public stop(): void {
+    this.shutdown.abort();
   }
 
   // ─── Accessors ─────────────────────────────────────────────────────────────

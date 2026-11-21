@@ -3,6 +3,7 @@ import * as path from 'path';
 import Parser from 'web-tree-sitter';
 import { ASTChunk } from '../types/index.js';
 import { VectorSearchEngine } from '../database/vector.js';
+import { MAX_INDEXED_FILE_BYTES, readWorkspaceText } from '../core/files.js';
 import { AsyncASTParser } from '../ast/asyncParser.js';
 
 let isParserInitialized = false;
@@ -18,12 +19,12 @@ async function initTreeSitter(): Promise<boolean> {
     const wasmPath = path.join(__dirname, 'tree-sitter.wasm');
     const altWasmPath = path.join(__dirname, '..', 'tree-sitter.wasm');
     const resolvedPath = fs.existsSync(wasmPath) ? wasmPath : (fs.existsSync(altWasmPath) ? altWasmPath : wasmPath);
-    await Parser.init({ moduleURL: resolvedPath });
+    const wasmBinary = await fs.promises.readFile(resolvedPath);
+    await Parser.init({ wasmBinary, locateFile: () => resolvedPath, print: console.error, printErr: console.error });
     isParserInitialized = true;
     return true;
   } catch (err) {
-    // Parser might have already been initialized elsewhere in the extension
-    isParserInitialized = true;
+    console.error('[ReMem AST] Could not initialize tree-sitter:', err);
     return false;
   }
 }
@@ -59,8 +60,7 @@ export class ASTContextChunker {
 
   private async init(): Promise<void> {
     try {
-      await initTreeSitter();
-      this.isReady = true;
+      this.isReady = await initTreeSitter();
     } catch {
       this.isReady = false;
     }
@@ -262,9 +262,6 @@ export class ASTContextChunker {
   }
 
   /**
-   * Indexes extracted AST chunks into Orama vector search engine.
-   */
-  /**
    * Asynchronously extracts AST code chunks off the main thread via worker_threads.
    */
   public async extractChunksAsync(filePath: string, relativePath: string, content: string): Promise<ASTChunk[]> {
@@ -278,21 +275,6 @@ export class ASTContextChunker {
       // Fallback to sync extraction
     }
     return this.extractChunks(filePath, relativePath, content);
-  }
-
-  public async indexFileChunks(
-    filePath: string,
-    relativePath: string,
-    content: string,
-    vectorEngine: VectorSearchEngine
-  ): Promise<ASTChunk[]> {
-    // Remove previous chunks for this file
-    await vectorEngine.removeChunksForFile(filePath);
-
-    const chunks = await this.extractChunksAsync(filePath, relativePath, content);
-    await vectorEngine.indexChunks(chunks);
-
-    return chunks;
   }
 
   /**
@@ -332,19 +314,19 @@ export class ASTContextChunker {
 
     // Otherwise, extract and return the top AST chunks from active file
     if (options.fileContent && options.relativePath) {
-      const chunks = this.extractChunks(activeFilePath, options.relativePath, options.fileContent);
+      if (Buffer.byteLength(options.fileContent) > MAX_INDEXED_FILE_BYTES) return [];
+      const chunks = await this.extractChunksAsync(activeFilePath, options.relativePath, options.fileContent);
       return chunks.slice(0, maxChunks);
     }
 
-    if (fs.existsSync(activeFilePath)) {
-      try {
-        const content = fs.readFileSync(activeFilePath, 'utf8');
-        const relPath = path.basename(activeFilePath);
-        const chunks = this.extractChunks(activeFilePath, relPath, content);
+    try {
+      const content = await readWorkspaceText(activeFilePath);
+      if (content !== undefined) {
+        const chunks = await this.extractChunksAsync(activeFilePath, path.basename(activeFilePath), content);
         return chunks.slice(0, maxChunks);
-      } catch {
-        // read error
       }
+    } catch {
+      // The file may disappear while the editor is requesting context.
     }
 
     return [];

@@ -1,8 +1,8 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import * as vscode from 'vscode';
+import type { LeanTraceabilityTracker } from '../task/traceability.js';
+import { refreshIndexedFile, workspaceFiles } from './workspaceIndex.js';
 import { DatabaseManager } from '../database/index.js';
-import { computeFileHash } from './hasher.js';
 import { SummarizerPipeline } from './pipeline.js';
 import { shouldIgnorePath } from '../config.js';
 
@@ -19,58 +19,45 @@ export async function indexWorkspace(
   workspaceRoot: string,
   dbManager: DatabaseManager,
   pipeline: SummarizerPipeline,
-  outputChannel?: vscode.OutputChannel
+  outputChannel?: { appendLine(message: string): void },
+  tracker?: LeanTraceabilityTracker,
+  signal?: AbortSignal,
 ): Promise<IndexingResult> {
   outputChannel?.appendLine(`[ReMem Indexer] Starting initial workspace scan for: ${workspaceRoot}`);
 
-  // Find files in workspace excluding common build/dependency artifacts
-  const excludePattern = '{**/node_modules/**,**/.git/**,**/.antigravityMem/**,**/out/**,**/dist/**,**/.vscode-test/**}';
-  const fileUris = await vscode.workspace.findFiles('**/*', excludePattern, 2000);
-
+  let totalFilesFound = 0;
   let indexedCount = 0;
   let skippedCount = 0;
-
-  for (const uri of fileUris) {
-    const filePath = uri.fsPath;
-    if (shouldIgnorePath(filePath)) {
-      continue;
-    }
-
-    try {
-      const stats = fs.statSync(filePath);
-      // Skip directories and huge binary files (> 1MB)
-      if (stats.isDirectory() || stats.size > 1024 * 1024) {
-        continue;
-      }
-
-      const content = fs.readFileSync(filePath, 'utf8');
-      const hash = computeFileHash(content);
-      const relativePath = path.relative(workspaceRoot, filePath);
-
-      const existing = dbManager.getFileSummary(filePath);
-      if (existing && existing.hash === hash) {
+  const batch: string[] = [];
+  async function flushBatch(): Promise<void> {
+    await Promise.all(batch.splice(0).map(async (file) => {
+      try {
+        if (await refreshIndexedFile(dbManager, pipeline, file, tracker, signal)) indexedCount++;
+        else skippedCount++;
+      } catch (error) {
+        signal?.throwIfAborted();
         skippedCount++;
-        continue;
+        outputChannel?.appendLine(`[ReMem Indexer] Could not index ${file}: ${error}`);
       }
-
-      // Summarize and store
-      await pipeline.summarizeContent(filePath, relativePath, content);
-      indexedCount++;
-    } catch (err) {
-      // Binary or unreadable file, ignore
-      continue;
-    }
+    }));
   }
+  for await (const file of workspaceFiles(workspaceRoot, signal)) {
+    totalFilesFound++;
+    batch.push(file);
+    if (batch.length === 16) await flushBatch();
+    if (totalFilesFound >= 2000) break;
+  }
+  await flushBatch();
 
   // Flush to disk after bulk indexing
   await dbManager.flushToDisk();
 
   outputChannel?.appendLine(
-    `[ReMem Indexer] Workspace indexing completed. Scanned: ${fileUris.length}, Newly Indexed/Updated: ${indexedCount}, Unchanged (Cached): ${skippedCount}`
+    `[ReMem Indexer] Workspace indexing completed. Scanned: ${totalFilesFound}, Newly Indexed/Updated: ${indexedCount}, Unchanged (Cached): ${skippedCount}`
   );
 
   return {
-    totalFilesFound: fileUris.length,
+    totalFilesFound: totalFilesFound,
     indexedCount,
     skippedCount,
   };

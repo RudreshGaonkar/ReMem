@@ -27,35 +27,51 @@ function copyWasmAssets() {
       fs.copyFileSync(src, dest);
       console.log(`[esbuild] Copied WASM asset: ${src} → ${dest}`);
     } else {
-      console.warn(`[esbuild] WARNING: WASM asset not found: ${src}`);
+      throw new Error(`Required WASM asset missing: ${src}`);
     }
   }
 }
 
 copyWasmAssets();
 
-/** @type {import('esbuild').BuildOptions} */
+const mcpOnly = process.argv.includes('--mcp');
 const buildOptions = {
-  entryPoints: ['src/extension.ts'],
+  entryPoints: mcpOnly
+    ? { 'remem-mcp': 'src/mcp/server.ts', 'storage-worker': 'src/database/storageWorker.ts' }
+    : { extension: 'src/extension.ts', 'remem-mcp': 'src/mcp/server.ts', 'storage-worker': 'src/database/storageWorker.ts' },
   bundle: true,
-  outfile: 'out/extension.js',
-  external: [
-    'vscode',       // provided by VS Code host — never bundle
-    'fsevents',     // optional macOS native watcher — safe to skip on Linux
-  ],
+  outdir: 'out',
+  external: ['vscode', 'fsevents'],
   format: 'cjs',
   platform: 'node',
+  mainFields: ['module', 'main'],
   target: 'node18',
+  define: { REMEM_VERSION: JSON.stringify(require('./package.json').version) },
   sourcemap: !isProd,
   minify: isProd,
-  logLevel: 'info',
+  logLevel: 'warning',
+  metafile: true,
+  plugins: [{
+    name: 'verify-headless-entry',
+    setup(build) {
+      build.onEnd((result) => {
+        const mcp = result.metafile?.outputs['out/remem-mcp.js'];
+        if (mcp?.imports.some((entry) => entry.path === 'vscode')) {
+          return { errors: [{ text: 'The MCP bundle must be independent of the editor API.' }] };
+        }
+        if (mcp) fs.chmodSync('out/remem-mcp.js', 0o755);
+      });
+    },
+  }],
 };
 
-if (isWatch) {
-  esbuild.context(buildOptions).then((ctx) => {
-    ctx.watch();
-    console.log('[esbuild] Watching for changes…');
-  });
-} else {
-  esbuild.build(buildOptions).catch(() => process.exit(1));
+async function main() {
+  if (isWatch) {
+    const context = await esbuild.context(buildOptions);
+    await context.watch();
+  } else {
+    await esbuild.build(buildOptions);
+  }
 }
+
+main().catch(() => { process.exitCode = 1; });

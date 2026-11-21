@@ -4,13 +4,13 @@ import { ErrorLedgerEntry } from '../types/index.js';
 /**
  * Queries the error ledger and formats post-mortem notes into a prompt-ready warning block.
  */
-export function getFormattedErrorContext(
+export async function getFormattedErrorContext(
   dbManager: DatabaseManager,
   activeFilePath?: string,
   activeBranch?: string
-): string {
-  const fileNotes = activeFilePath ? dbManager.getErrorNotesForFile(activeFilePath) : [];
-  const branchNotes = activeBranch ? dbManager.getErrorNotesForBranch(activeBranch) : [];
+): Promise<string> {
+  const fileNotes = activeFilePath ? await dbManager.sqlite.query('getErrorNotesForFile', activeFilePath) : [];
+  const branchNotes = activeBranch ? await dbManager.sqlite.query('getErrorNotesForBranch', activeBranch) : [];
 
   // Deduplicate entries by ID or postMortemNote + timestamp
   const seenIds = new Set<number | string>();

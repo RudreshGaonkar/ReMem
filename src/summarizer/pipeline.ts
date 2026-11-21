@@ -1,8 +1,7 @@
 import * as path from 'path';
-import type * as vscode from 'vscode';
 import { CONFIG } from '../config.js';
 import { DatabaseManager } from '../database/index.js';
-import { FileSummary } from '../types/index.js';
+import { ASTChunk, FileSummary } from '../types/index.js';
 import { computeFileHash, estimateTokenCount } from './hasher.js';
 import { encryptSecret } from '../vault/crypto.js';
 import type { VaultStorage } from '../vault/storage.js';
@@ -41,7 +40,7 @@ export class SummarizerPipeline {
   /**
    * Summarizes a VS Code TextDocument and stores the result in SQLite + Orama.
    */
-  public async summarizeDocument(document: vscode.TextDocument): Promise<FileSummary | null> {
+  public async summarizeDocument(document: { uri: { fsPath: string }; getText(): string }): Promise<FileSummary | null> {
     const filePath = document.uri.fsPath;
     const content = document.getText();
     const relativePath = this.dbManager.rootPath ? path.relative(this.dbManager.rootPath, filePath) : path.basename(filePath);
@@ -55,13 +54,16 @@ export class SummarizerPipeline {
   public async summarizeContent(
     filePath: string,
     relativePath: string,
-    content: string
+    content: string,
+    signal?: AbortSignal,
   ): Promise<FileSummary | null> {
+    signal?.throwIfAborted();
     const hash = computeFileHash(content);
     const isSensitive = this.isSensitiveFile(filePath);
     const tokenCount = estimateTokenCount(content);
 
     let summaryText: string;
+    let chunks: ASTChunk[] = [];
 
     if (isSensitive) {
       summaryText = `[Encrypted Vault File] Sensitive configuration or secret keys (${path.basename(filePath)}). Protected by AES-256-GCM (Native Keychain).`;
@@ -90,7 +92,7 @@ export class SummarizerPipeline {
     } else {
       summaryText = this.generateStructuralSummary(filePath, content);
       try {
-        await this.chunker.indexFileChunks(filePath, relativePath, content, this.dbManager.vector);
+        chunks = await this.chunker.extractChunksAsync(filePath, relativePath, content);
       } catch (err) {
         // Fallback: non-fatal if chunking encounters unparseable syntax
       }
@@ -106,7 +108,8 @@ export class SummarizerPipeline {
       isEncrypted: isSensitive,
     };
 
-    await this.dbManager.saveFileSummary(fileSummary);
+    signal?.throwIfAborted();
+    await this.dbManager.saveFileSummary(fileSummary, chunks);
     return fileSummary;
   }
 

@@ -250,7 +250,7 @@ export class AsyncASTParser {
   private static instance: AsyncASTParser | null = null;
   private worker: Worker | null = null;
   private taskIdCounter: number = 0;
-  private pendingTasks: Map<number, { resolve: (res: ParseResult) => void; reject: (err: any) => void }> = new Map();
+  private pendingTasks: Map<number, { resolve: (res: ParseResult) => void; reject: (err: unknown) => void; timer: NodeJS.Timeout }> = new Map();
   private workerAvailable: boolean = true;
 
   public constructor() {
@@ -264,6 +264,11 @@ export class AsyncASTParser {
     return AsyncASTParser.instance;
   }
 
+  public static disposeShared(): void {
+    AsyncASTParser.instance?.dispose();
+    AsyncASTParser.instance = null;
+  }
+
   private initWorker(): void {
     try {
       this.worker = new Worker(WORKER_CODE, { eval: true });
@@ -271,6 +276,7 @@ export class AsyncASTParser {
         const handler = this.pendingTasks.get(msg.id);
         if (handler) {
           this.pendingTasks.delete(msg.id);
+          clearTimeout(handler.timer);
           if (msg.success && msg.result) {
             handler.resolve(msg.result);
           } else {
@@ -286,7 +292,9 @@ export class AsyncASTParser {
       });
 
       this.worker.on('exit', () => {
+        this.workerAvailable = false;
         this.worker = null;
+        this.drainPendingTasks(new Error('AST worker exited'));
       });
     } catch (err) {
       console.warn('[ReMem AsyncParser] worker_threads unavailable, using non-blocking promise fallback:', err);
@@ -294,8 +302,9 @@ export class AsyncASTParser {
     }
   }
 
-  private drainPendingTasks(err: any): void {
+  private drainPendingTasks(err: unknown): void {
     for (const handler of this.pendingTasks.values()) {
+      clearTimeout(handler.timer);
       handler.reject(err);
     }
     this.pendingTasks.clear();
@@ -305,20 +314,39 @@ export class AsyncASTParser {
    * Parses file content asynchronously. Runs on a background worker thread if available,
    * or executes via non-blocking setImmediate promise slicing on the main thread.
    */
+  private disposed = false;
+
   public async parseAsync(filePath: string, relativePath: string, content: string): Promise<ParseResult> {
+    if (this.disposed) throw new Error('AST parser is disposed');
     if (this.workerAvailable && this.worker) {
       return new Promise<ParseResult>((resolve, reject) => {
         const id = ++this.taskIdCounter;
-        this.pendingTasks.set(id, { resolve, reject });
-        this.worker!.postMessage({ id, content, filePath, relativePath });
+        const timer = setTimeout(() => {
+          this.pendingTasks.delete(id);
+          reject(new Error('AST parse timed out'));
+          this.workerAvailable = false;
+          this.stopWorker(new Error('AST worker stopped after a parse timeout'));
+        }, 5000);
+        this.pendingTasks.set(id, { resolve, reject, timer });
+        try {
+          this.worker!.postMessage({ id, content, filePath, relativePath });
+        } catch (error) {
+          clearTimeout(timer);
+          this.pendingTasks.delete(id);
+          reject(error);
+        }
       });
     }
 
     // Non-blocking promise fallback with setImmediate macro-task yield
-    return new Promise<ParseResult>((resolve) => {
+    return new Promise<ParseResult>((resolve, reject) => {
       setImmediate(() => {
-        const result = this.fallbackParse(filePath, relativePath, content);
-        resolve(result);
+        try {
+          if (this.disposed) throw new Error('AST parser is disposed');
+          resolve(this.fallbackParse(filePath, relativePath, content));
+        } catch (error) {
+          reject(error);
+        }
       });
     });
   }
@@ -465,10 +493,15 @@ export class AsyncASTParser {
   }
 
   public dispose(): void {
+    this.disposed = true;
+    this.stopWorker(new Error('AST parser is disposed'));
+  }
+
+  private stopWorker(error: Error): void {
+    this.drainPendingTasks(error);
     if (this.worker) {
-      this.worker.terminate();
+      void this.worker.terminate().catch((error) => console.error(error));
       this.worker = null;
     }
-    this.pendingTasks.clear();
   }
 }

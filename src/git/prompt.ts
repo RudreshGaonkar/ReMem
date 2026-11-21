@@ -39,7 +39,7 @@ export async function promptForPostMortem(
         timestamp,
         resolved: false,
       };
-      dbManager.addErrorNote(entry);
+      await dbManager.addErrorNote(entry);
     }
   } else {
     const entry: ErrorLedgerEntry = {

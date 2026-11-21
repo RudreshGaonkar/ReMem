@@ -1,8 +1,12 @@
 import * as vscode from 'vscode';
+import * as path from 'path';
+import * as fs from 'fs';
+import { WorkspaceWorkQueue } from '../core/workQueue.js';
+import { indexWorkspace } from '../summarizer/indexer.js';
 import { DatabaseManager } from '../database/index.js';
 import { shouldIgnorePath } from '../config.js';
 import { SecretShield } from '../core/ignore.js';
-import { computeFileHash } from '../summarizer/hasher.js';
+import { refreshIndexedFile } from '../summarizer/workspaceIndex.js';
 import { SummarizerPipeline } from '../summarizer/pipeline.js';
 import type { LeanTraceabilityTracker } from '../task/traceability.js';
 import type { KnowledgeGraphEngine } from './graph.js';
@@ -60,149 +64,52 @@ export function setupAntiLoopFileWatcher(
   pipeline: SummarizerPipeline,
   outputChannel?: vscode.OutputChannel,
   traceabilityTracker?: LeanTraceabilityTracker,
-  graphEngine?: KnowledgeGraphEngine
-): void {
-  // Map of active debounce timers per file path
-  const debounceTimers = new Map<string, NodeJS.Timeout>();
-
-  const saveListener = vscode.workspace.onDidSaveTextDocument(async (document: vscode.TextDocument) => {
-    const isEnabled = vscode.workspace.getConfiguration('remem').get<boolean>('enableAutoSummarize', true);
-    if (!isEnabled) {
-      return;
+  graphEngine?: KnowledgeGraphEngine,
+  syncTasks?: () => Promise<unknown>,
+): { add(file: string): void; stop(): Promise<void> } {
+  const report = (error: unknown) => outputChannel?.appendLine(`[ReMem Watcher] ${error}`);
+  const queue = new WorkspaceWorkQueue(async (files, signal, overflow) => {
+    if (overflow) {
+      report('Event capacity exceeded, rescanning the workspace');
+      await indexWorkspace(dbManager.rootPath, dbManager, pipeline, outputChannel, traceabilityTracker, signal);
     }
-
-    // Ignore unsupported schemes (e.g. git, output, debug)
-    if (document.uri.scheme !== 'file') {
-      return;
+    const enabled = vscode.workspace.getConfiguration('remem').get<boolean>('enableAutoSummarize', true);
+    const indexedFiles = enabled ? files : files.filter((file) => !fs.existsSync(file));
+    for (let offset = 0; offset < indexedFiles.length; offset += 16) {
+      signal.throwIfAborted();
+      await Promise.all(indexedFiles.slice(offset, offset + 16).map((file) =>
+        refreshIndexedFile(dbManager, pipeline, file, traceabilityTracker, signal).catch(report)));
     }
+    signal.throwIfAborted();
+    if (files.some((file) => path.extname(file).toLowerCase() === '.md')) await syncTasks?.();
+    if (indexedFiles.length || overflow) await graphEngine?.updateContextFeedSilently(signal);
+  }, report, WATCHER_DEBOUNCE_MS);
 
-    const filePath = document.uri.fsPath;
-
-    // Strict Anti-Loop Guard Clauses: exit immediately
-    if (isLoopInducingOrInternalPath(filePath)) {
-      return;
-    }
-
-    if (shouldIgnorePath(filePath)) {
-      return;
-    }
-
-    // Clear any existing debounce timer for this file
-    const existingTimer = debounceTimers.get(filePath);
-    if (existingTimer) {
-      clearTimeout(existingTimer);
-      debounceTimers.delete(filePath);
-    }
-
-    // Strict 1200ms debounce
-    const timer = setTimeout(async () => {
-      debounceTimers.delete(filePath);
-
-      try {
-        const content = document.getText();
-        const currentHash = computeFileHash(content);
-
-        // Parse imports & exports to update SQLite traceability ledger on file save
-        if (traceabilityTracker) {
-          try {
-            await traceabilityTracker.processSavedFile(filePath, content);
-          } catch {
-            // Non-blocking
-          }
-        }
-
-        // Check existing hash in SQLite to skip redundant processing
-        const existing = dbManager.getFileSummary(filePath);
-        if (existing && existing.hash === currentHash) {
-          outputChannel?.appendLine(
-            `[ReMem Watcher] Content hash unchanged for ${vscode.workspace.asRelativePath(document.uri)}. Skipping summarization.`
-          );
-          return;
-        }
-
-        // Content changed or new file: summarize
-        outputChannel?.appendLine(
-          `[ReMem Watcher] Content changed in ${vscode.workspace.asRelativePath(document.uri)}. Updating summary...`
-        );
-
-        const summary = await pipeline.summarizeDocument(document);
-        if (summary) {
-          outputChannel?.appendLine(
-            `[ReMem Watcher] Summary updated for ${summary.relativePath}: "${summary.summary}"`
-          );
-        }
-
-        // Silently update .remem_context_feed.md in background
-        if (graphEngine) {
-          graphEngine.updateContextFeedSilently().catch(() => {});
-        }
-      } catch (err) {
-        outputChannel?.appendLine(`[ReMem Watcher Error] Failed to process ${filePath}: ${err}`);
-      }
-    }, WATCHER_DEBOUNCE_MS);
-
-    debounceTimers.set(filePath, timer);
-  });
-
-  // Watch for file deletions
-  const deleteListener = vscode.workspace.onDidDeleteFiles(async (event: vscode.FileDeleteEvent) => {
-    for (const fileUri of event.files) {
-      const filePath = fileUri.fsPath;
-      if (isLoopInducingOrInternalPath(filePath)) continue;
-
-      try {
-        await dbManager.deleteFileSummary(filePath);
-        outputChannel?.appendLine(
-          `[ReMem Watcher] Removed deleted file from memory index: ${vscode.workspace.asRelativePath(fileUri)}`
-        );
-        if (graphEngine) {
-          graphEngine.updateContextFeedSilently().catch(() => {});
-        }
-      } catch (err) {
-        outputChannel?.appendLine(`[ReMem Watcher Error] Failed to remove ${filePath}: ${err}`);
-      }
-    }
-  });
-
-  // Watch for file renames
-  const renameListener = vscode.workspace.onDidRenameFiles(async (event: vscode.FileRenameEvent) => {
-    for (const file of event.files) {
-      const oldPath = file.oldUri.fsPath;
-      const newPath = file.newUri.fsPath;
-
-      if (isLoopInducingOrInternalPath(oldPath) && isLoopInducingOrInternalPath(newPath)) continue;
-
-      try {
-        await dbManager.deleteFileSummary(oldPath);
-        if (!shouldIgnorePath(newPath) && !isLoopInducingOrInternalPath(newPath)) {
-          const doc = await vscode.workspace.openTextDocument(file.newUri);
-          await pipeline.summarizeDocument(doc);
-          outputChannel?.appendLine(
-            `[ReMem Watcher] Renamed summary from ${vscode.workspace.asRelativePath(file.oldUri)} -> ${vscode.workspace.asRelativePath(file.newUri)}`
-          );
-        }
-        if (graphEngine) {
-          graphEngine.updateContextFeedSilently().catch(() => {});
-        }
-      } catch (err) {
-        outputChannel?.appendLine(`[ReMem Watcher Error] Failed to handle rename ${oldPath}: ${err}`);
-      }
-    }
-  });
-
-  context.subscriptions.push(
-    saveListener,
-    deleteListener,
-    renameListener,
-    {
-      dispose: () => {
-        for (const timer of debounceTimers.values()) {
-          clearTimeout(timer);
-        }
-        debounceTimers.clear();
-      },
-    }
-  );
+  const add = (file: string) => {
+    if (!isLoopInducingOrInternalPath(file) && !shouldIgnorePath(file)) queue.add(file);
+  };
+  const enqueue = (uri: vscode.Uri) => {
+    if (uri.scheme === 'file') add(uri.fsPath);
+  };
+  const watcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(dbManager.rootPath, '**/*'));
+  const listeners = [
+    watcher,
+    watcher.onDidCreate(enqueue),
+    watcher.onDidChange(enqueue),
+    watcher.onDidDelete(enqueue),
+    vscode.workspace.onDidSaveTextDocument((document) => enqueue(document.uri)),
+    vscode.workspace.onDidDeleteFiles((event) => event.files.forEach(enqueue)),
+    vscode.workspace.onDidRenameFiles((event) => event.files.forEach(({ oldUri, newUri }) => {
+      enqueue(oldUri);
+      enqueue(newUri);
+    })),
+  ];
+  const stop = () => {
+    for (const listener of listeners) listener.dispose();
+    return queue.stop();
+  };
+  context.subscriptions.push({ dispose: () => { void stop(); } });
+  return { add, stop };
 }
 
 /**

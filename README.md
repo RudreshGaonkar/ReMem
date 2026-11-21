@@ -2,10 +2,10 @@
 
 # 🧠 ReMem — Local AI Memory & Token Optimization Context Engine
 
-**Supercharge AI coding assistants with local RAG, persistent knowledge graphs, AST blast radius tracking, strict workspace isolation, and 95%+ prompt token reduction.**
+**Local code search, dependency graphs, and session handoff for editor and command-line agents.**
 
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.6-3178C6.svg?style=for-the-badge&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
-[![VS Code Extension](https://img.shields.io/badge/VS%20Code-Extension%20v0.0.6-007ACC.svg?style=for-the-badge&logo=visualstudiocode&logoColor=white)](https://marketplace.visualstudio.com/)
+[![VS Code Extension](https://img.shields.io/badge/VS%20Code-Extension%20v0.2.0-007ACC.svg?style=for-the-badge&logo=visualstudiocode&logoColor=white)](https://marketplace.visualstudio.com/)
 [![SQLite WASM](https://img.shields.io/badge/SQLite-WebAssembly-003B57.svg?style=for-the-badge&logo=sqlite&logoColor=white)](https://sql.js.org/)
 [![Orama Vector](https://img.shields.io/badge/Orama-Embedded%20Search-FF6600.svg?style=for-the-badge)](https://oramasearch.com/)
 [![Worker Threads](https://img.shields.io/badge/Node.js-Worker%20Threads%20Async-339933.svg?style=for-the-badge&logo=nodedotjs&logoColor=white)](https://nodejs.org/api/worker_threads.html)
@@ -14,7 +14,7 @@
 
 <p align="center">
   <a href="#-key-features">Features</a> •
-  <a href="#-whats-new-in-v006-stability-graph--isolation-engine">What's New in v0.0.6</a> •
+  <a href="#sidebar-and-cli-integration">Sidebar and CLI</a> •
   <a href="#-how-it-works-architecture">Architecture</a> •
   <a href="#-quick-start--installation">Quick Start</a> •
   <a href="#-token-optimization-benchmark">Benchmarks</a> •
@@ -28,52 +28,51 @@
 
 ## 📌 Overview: What is ReMem?
 
-**ReMem (Recall & Memory)** is a developer-first, zero-cloud context engine and state manager built for **VS Code** and **Antigravity IDE**. It acts as an intelligent local **Retrieval-Augmented Generation (RAG) middleman** between your codebase and AI coding agents (such as Antigravity, GitHub Copilot, Cursor, and Claude Code).
+ReMem indexes a workspace locally and shares summaries, exported symbols, module dependencies, task progress, and post-mortem notes with coding agents. The editor extension and standalone MCP server use the same index and session ledger.
 
-By mapping the codebase incrementally, generating 1–2 sentence structural summaries, building a persistent knowledge graph (`.remem_context_feed.md`), tracking Git rollbacks with post-mortem notes, and encrypting environment secrets with AES-256-GCM, ReMem **reduces prompt token consumption by up to 99%** and permanently eliminates AI context amnesia and wasteful filesystem scans.
+## Sidebar and CLI integration
 
+The extension keeps `.remem_context_feed.md` and `.recall_scratchpad.md` at the workspace root. It maintains a marked ReMem block in `AGENTS.md`, `CLAUDE.md`, and `.agents/rules/remem.md`, plus `.antigravity/rules.md` when that legacy file exists. Existing instructions outside the block are preserved. Start a new agent session to pick up workspace instructions. Agents that load these files can follow the pointers even when they bypass the optional `@remem` participant.
+
+The sidebar instructions and assembled context carry ReMem's security and lean rules. Zero-Fluff Mode adds the output-only directive when enabled. These are prompt instructions, and adherence depends on the host and model. The diff auditor independently flags supported security and overbuild patterns and shows current spec checklist progress for verification.
+
+Run **ReMem: Install CLI Skill & MCP Config** in the editor or run the installer from a source checkout.
+
+```bash
+npm run build:mcp
+node out/remem-mcp.js install --workspace /path/to/project
 ```
-+-----------------------------------------------------------------------------------+
-|  Without ReMem: Raw 500-line files dumped into prompt  --> 15,000+ tokens / turn  |
-|  With ReMem:    Knowledge Graph + AST Radius + RAG     --> ~250 tokens / turn     |
-|                                                            (98.3% Token Savings)  |
-+-----------------------------------------------------------------------------------+
-```
+
+To distribute a local npm package, run `npm pack`. Install from that tarball with `npm exec --package /path/to/remem-context-engine-0.2.0.tgz -- remem-mcp install --workspace /path/to/project`. The installer copies the server and WASM assets into the project and adds workspace-scoped registrations:
+
+| Host | MCP configuration | Skill discovery |
+|---|---|---|
+| VS Code | `.vscode/mcp.json` | Workspace instructions in `AGENTS.md` |
+| Antigravity IDE and CLI | `.agents/mcp_config.json` | `.agents/skills/remem/SKILL.md` |
+| Codex CLI | `.codex/config.toml` | `.agents/skills/remem/SKILL.md` |
+| Claude Code | `.mcp.json` | `.claude/skills/remem/SKILL.md` |
+
+Reload the host and approve its workspace trust or MCP prompt if requested. The installer registers a local Node process. Its absolute paths refer to the machine where the installer ran. Use `--zero-fluff` to enable Zero-Fluff Mode for the standalone server. You can also launch the server directly with `node out/remem-mcp.js --workspace /path/to/project`.
+
+| MCP tool | Purpose |
+|---|---|
+| `remem_search` | Search file summaries and symbols. |
+| `remem_blast_radius` | Return direct imports, dependents, and exports. |
+| `remem_get_context` | Assemble compact code, architecture, task, resume, and error context. |
+| `remem_log_postmortem` | Record a failure and the lesson that prevents it recurring. |
+| `remem_save_session_state` | Persist a checkpoint in the scratchpad and session ledger. |
+
+The server provides `remem://context-feed`, `remem://scratchpad`, and `remem://error-ledger`. The error resource shows recorded notes for the current branch. Both targets use file locks and atomic snapshot replacement for shared SQLite and search data. ReMem automatically reclaims locks whose owner has exited or whose recorded age exceeds 10 seconds.
 
 ---
 
-## 🚀 What's New in v0.0.6: Stability, Graph & Isolation Engine
-
-The **v0.0.6 release** introduces core architecture enhancements designed for multi-window stability, zero-lag async execution, and automated AI orientation:
-
-1. **🔒 Strict Workspace Isolation (`src/core/workspace.ts`)**
-   - Strictly scopes `remem_ledger.sqlite` and the `@orama/orama` index to the active workspace path (`vscode.workspace.workspaceFolders[0]`).
-   - Completely removes `globalState` persistence across windows to eliminate context bleeding between simultaneous projects.
-   - Enforces the active workspace root as the mandatory, sandboxed working directory (`cwd`) for all AI terminal commands and process executions.
-
-2. **⚡ Anti-Loop File Watcher (`src/context/watchers.ts`)**
-   - Implements strict guard clauses that immediately bypass change events containing `.antigravityMem`, `.recall_scratchpad.md`, or `.remem_context_feed.md`.
-   - Enforces a strict **1200ms debounce** to prevent CPU spikes and eliminate recursive self-triggering save loops.
-
-3. **🗺️ Persistent Knowledge Graph (`src/context/graph.ts`)**
-   - Extracts complete module dependency mappings and exported symbols directly from SQLite `remem_ledger.sqlite`.
-   - Compresses the codebase architecture into `.remem_context_feed.md` at the workspace root, updated silently in the background on file saves.
-
-4. **🤖 Pre-Boot Context Provider (`src/context/preboot.ts`)**
-   - Injects `.remem_context_feed.md` directly into the AI system prompt the moment a new chat session boots.
-   - Enforces the prompt directive: *"You have received the project architecture map. Do not run commands to scan or analyze the workspace files. Rely strictly on this map and the local Orama search."*
-
-5. **🧵 Async Execution & UI Unblocking (`src/ast/asyncParser.ts`)**
-   - Offloads AST parsing and tree-sitter chunking entirely into Node.js `worker_threads` (with non-blocking macro-task promise slicing fallback) so the main VS Code UI thread never hitches.
-
----
 
 ## ⚡ The Problems ReMem Solves
 
 | Problem in Modern AI Coding | What Happens Without ReMem | How ReMem Solves It |
 |---|---|---|
 | **🚨 Context Window Exhaustion** | Large codebases exceed LLM context windows (8k/32k/128k), forcing truncation. | **Hierarchical Summarization:** Compresses source files into 15–30 token structural summaries with SHA-256 caching. |
-| **🔍 Wasteful AI File Scans** | AI coding agents execute slow `find`, `grep`, and `cat` commands across the workspace to orient themselves. | **Pre-Boot Knowledge Graph (`.remem_context_feed.md`):** Instant topology and exports delivered upfront with an explicit directive barring file scans. |
+| **🔍 Wasteful AI File Scans** | AI coding agents execute slow `find`, `grep`, and `cat` commands across the workspace to orient themselves. | **Pre-Boot Knowledge Graph (`.remem_context_feed.md`):** Topology and exports provide a starting point for focused source inspection. |
 | **🪟 Cross-Window Context Bleed** | Opening multiple projects in VS Code causes scratchpads and state to contaminate other windows. | **Strict Workspace Isolation:** Scopes SQLite, Orama, and state strictly to `workspaceFolders[0]` via `workspaceState`. |
 | **🔁 Context Amnesia & Repeated Bugs** | When a developer reverts a broken commit or branch, the AI repeats the exact same mistake. | **Git Error Ledger:** Watches `.git/HEAD` and prompts for post-mortem warnings, prepending them to future AI prompts. |
 | **🔓 Plaintext Secrets Exposure** | AI prompts ingest `.env`, `*.pem`, and `secrets.json` in plaintext. | **Secure Secrets Vault:** Encrypts sensitive files using AES-256-GCM with 100k-iteration PBKDF2 & 1-hour in-memory cache. |
@@ -111,8 +110,7 @@ The **v0.0.6 release** introduces core architecture enhancements designed for mu
 - **Topology Extraction:** Directly extracts all workspace module imports, exports, and dependents from SQLite `remem_ledger.sqlite`.
 - **Token-Compressed Architecture Map:** Compresses the graph into `.remem_context_feed.md` in the workspace root, containing node summaries, exported symbols, and a compact dependency adjacency matrix.
 - **Silent Background Updates:** Refreshes automatically in the background on document saves without interrupting active coding.
-- **Pre-Boot System Prompt Injection:** Automatically delivers the architecture map to AI sessions at chat boot, accompanied by a strict directive:
-  > *"You have received the project architecture map. Do not run commands to scan or analyze the workspace files. Rely strictly on this map and the local Orama search."*
+- **Pre-Boot Context:** The optional chat participant assembles context directly. Other agents can follow the workspace instruction pointers or request context through MCP.
 
 ### 7. 🔒 Strict Multi-Window Workspace Isolation & Sandboxing
 - **Workspace-Folder Scoping:** Automatically scopes SQLite ledgers, Orama vector indexes, and scratchpads to the active folder (`vscode.workspace.workspaceFolders[0]`).
@@ -202,7 +200,7 @@ npm install
 # Typecheck TypeScript sources
 npm run typecheck
 
-# Bundle extension into out/extension.js and copy WASM assets via esbuild
+# Bundle both targets and copy their WASM assets
 npm run compile
 
 # Run incremental bundler in watch mode
@@ -211,7 +209,7 @@ npm run watch
 # Package as a .vsix extension file
 npm run package
 
-# (Antigravity IDE only) Package and force-install directly into Antigravity IDE
+# Package and install with the editor CLI (set REMEM_IDE_COMMAND to override)
 npm run install:ide
 ```
 
@@ -241,6 +239,11 @@ Open the Command Palette (`Ctrl+Shift+P` on Linux/Windows, `Cmd+Shift+P` on macO
 | **ReMem: Lock Secure Secrets Vault** | `remem.lockVault` | Immediately wipes cached master password credentials from memory. |
 | **ReMem: Re-index Workspace Files** | `remem.reindexWorkspace` | Manually triggers a background rescan and indexation of workspace files. |
 | **ReMem: Purge and Rebuild Local Memory** | `remem.purgeMemory` | Completely clears local memory caches and resets databases (modal confirmation required). |
+| **ReMem: Audit Active / Staged Diff** | `remem.reviewDiff` | Audits staged or unstaged diffs for security violations, overbuilding, and spec compliance. |
+| **ReMem: Sync Spec & Task Progress** | `remem.syncTaskProgress` | Synchronizes task checklist progress against specification files. |
+| **ReMem: Collect Tech Debt Ledger** | `remem.logDebt` | Scans workspace and aggregates TODO/FIXME debt items into the debt ledger. |
+| **ReMem: Toggle Zero-Fluff Mode** | `remem.toggleZeroFluffMode` | Toggles Zero-Fluff execution mode (silent 4-point audit, no `<thinking>` tags, outputs only hardened code/diffs). |
+| **ReMem: Install CLI Skill & MCP Config** | `remem.installSkill` | Automatically installs ReMem CLI skill and workspace MCP config for VS Code, Antigravity, Codex, or Claude Code. |
 
 ---
 
@@ -257,7 +260,10 @@ Configure ReMem to match your development workflow in VS Code `settings.json`:
   "remem.vaultSessionTimeoutMinutes": 60,
 
   // Number of conversation turns before untouched files are pruned from context (default: 3)
-  "remem.lruContextTurnLimit": 3
+  "remem.lruContextTurnLimit": 3,
+
+  // Zero-Fluff Mode: silent 4-point audit before modifying code, emits no thinking tags, outputs only code/diffs (default: false)
+  "remem.ZeroFluffMode": false
 }
 ```
 
@@ -297,21 +303,35 @@ Full-codebase RAG embeddings can still generate thousands of tokens of noisy sou
 
 ```
 ReMem/
-├── package.json               # Extension manifest & npm scripts (v0.0.6)
+├── package.json               # Extension manifest & npm scripts (v0.2.0)
 ├── tsconfig.json              # TypeScript compilation config
 ├── esbuild.js                 # Production bundler & WASM asset manager
 ├── README.md                  # SEO-optimized project overview & guide
 ├── Explanation.md             # In-depth architectural & interview handbook
 ├── LICENSE                    # MIT License
+├── skills/
+│   └── remem/SKILL.md         # ReMem CLI agent skill definition
+├── scripts/
+│   └── install-ide.cjs        # Script for direct IDE installation
+├── tests/                     # Test suite
 └── src/
     ├── config.ts              # Constants & file path resolvers
     ├── extension.ts           # Extension entry point & lifecycle coordinator
+    ├── mcp/                   # Model Context Protocol (MCP) server & installer
+    │   ├── server.ts          # Standalone MCP server (tools & resources)
+    │   └── install.ts         # Multi-host MCP and skill configurator
+    ├── ide/                   # IDE Chat Participant & Integration
+    │   └── chat.ts            # Chat participant handler
     ├── core/                  # Strict Workspace Isolation & Sandboxing
-    │   └── workspace.ts       # WorkspaceIsolationManager & CWD sandbox enforcement
+    │   ├── workspace.ts       # WorkspaceIsolationManager & CWD sandbox enforcement
+    │   ├── files.ts           # Workspace file utilities
+    │   ├── ignore.ts          # .gitignore & rule ignore pattern matching
+    │   └── workQueue.ts       # Sequential async work queue
     ├── context/               # High-Performance Watchers, Knowledge Graph & Pre-Boot
     │   ├── watchers.ts        # Anti-Loop file watcher with 1200ms debounce
     │   ├── graph.ts           # Persistent Knowledge Graph engine
-    │   ├── preboot.ts         # Pre-Boot context provider & chat participant hook
+    │   ├── preboot.ts         # Shared architecture and resume context
+    │   ├── instructions.ts    # Agent rule and instruction block injector
     │   ├── chunker.ts         # Granular AST context chunker for Orama indexing
     │   ├── leanRules.ts       # Decision hierarchy & reuse rules
     │   └── security.ts        # Zero-trust AppSec persona injection
@@ -319,11 +339,14 @@ ReMem/
     ├── database/              # SQLite WASM & Orama Vector storage
     │   ├── sqlite.ts          # sql.js in-memory SQLite with corruption recovery
     │   ├── vector.ts          # @orama/orama embedded search
-    │   └── index.ts           # Unified DatabaseManager coordinating dual writes
+    │   ├── index.ts           # Unified DatabaseManager coordinating dual writes
+    │   ├── storageWorker.ts   # Background thread storage worker
+    │   └── storageWorkerClient.ts # Storage worker IPC client
     ├── summarizer/            # File watcher & structural summarizer
     │   ├── hasher.ts          # SHA-256 content hashing & token estimation
     │   ├── pipeline.ts        # 1-2 sentence structural summarizer
     │   ├── watcher.ts         # Git sync triggers & backward-compatible exports
+    │   ├── workspaceIndex.ts  # Workspace index management
     │   └── indexer.ts         # Background workspace indexer & directory tree
     ├── git/                   # Git rollback watcher & Error Ledger
     │   ├── watcher.ts         # .git/HEAD kernel-level file watcher (read-only)
@@ -335,7 +358,7 @@ ReMem/
     │   └── traceability.ts    # LeanTraceabilityTracker & Ripple Effect warnings
     ├── review/                # Local Diff Auditing & Safety
     │   ├── auditor.ts         # LocalDiffAuditor (Git diff & AST verification)
-    │   └── overbuild.ts       # Overbuild detection and spec verification
+    │   └── overbuild.ts       # Overbuild detection
     ├── vault/                 # AES-256-GCM Secrets Vault
     │   ├── crypto.ts          # AES-256-GCM + 100k PBKDF2 encryption/decryption
     │   ├── storage.ts         # .antigravityMem/vault.enc manager

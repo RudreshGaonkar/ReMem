@@ -10,3 +10,5 @@ dist/
 *.log
 antigravity_extension.md
 Explanation.md
+
+.agents/remem-runtime/

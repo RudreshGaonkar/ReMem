@@ -1,4 +1,6 @@
 import * as path from 'path';
+import { isWorkspacePath } from '../core/files.js';
+import { SecretShield } from '../core/ignore.js';
 import { CONFIG, getDbFilePath, getMemoryDirPath } from '../config.js';
 import { ASTChunk, ErrorLedgerEntry, FileSummary } from '../types/index.js';
 import { SqliteLedger } from './sqlite.js';
@@ -15,6 +17,7 @@ export class DatabaseManager {
   private vectorEngine: VectorSearchEngine | null = null;
   private workspaceRoot: string = '';
   private isInitialized: boolean = false;
+  private closed = false;
 
   /**
    * Initializes both the SQLite and Vector database instances inside .antigravityMem/.
@@ -31,17 +34,20 @@ export class DatabaseManager {
     const memDir = getMemoryDirPath(workspaceRoot);
     const dbPath = getDbFilePath(workspaceRoot);
     const vectorIndexPath = path.join(memDir, CONFIG.VECTOR_INDEX_FILE_NAME);
+    if (![dbPath, vectorIndexPath].every((file) => isWorkspacePath(workspaceRoot, file))) {
+      throw new Error('Unsafe workspace database path.');
+    }
+    SecretShield.getInstance(workspaceRoot);
 
     // Initialize SQLite (re-opens existing DB if file is present on disk)
     this.sqliteLedger = new SqliteLedger(dbPath);
     await this.sqliteLedger.initialize();
-
-    // Verify the on-disk schema is complete and up-to-date
-    this.sqliteLedger.verifyAndRepairSchema();
+    if (this.closed) throw new Error('Database manager is closed');
 
     // Initialize Vector / Orama engine (restores from disk snapshot if present)
     this.vectorEngine = new VectorSearchEngine(vectorIndexPath);
-    await this.vectorEngine.initialize();
+    await this.vectorEngine.initialize(workspaceRoot);
+    if (this.closed) throw new Error('Database manager is closed');
 
     this.isInitialized = true;
   }
@@ -60,22 +66,13 @@ export class DatabaseManager {
       return 0;
     }
 
-    const summaries = this.sqliteLedger.getAllFileSummaries();
+    const summaries = await this.sqliteLedger.query('getAllFileSummaries');
     let rehydrated = 0;
 
-    for (const summary of summaries) {
-      if (!summary.isEncrypted) {
-        await this.vectorEngine.indexSummary({
-          filePath: summary.filePath,
-          relativePath: summary.relativePath,
-          summary: summary.summary,
-        });
-        rehydrated++;
-      }
-    }
-
-    if (rehydrated > 0) {
-      await this.vectorEngine.saveToDisk();
+    for (let offset = 0; offset < summaries.length; offset += 32) {
+      const batch = summaries.slice(offset, offset + 32).filter((summary) => !summary.isEncrypted);
+      await Promise.all(batch.map((summary) => this.vectorEngine!.indexSummary(summary, true)));
+      rehydrated += batch.length;
     }
 
     return rehydrated;
@@ -86,11 +83,11 @@ export class DatabaseManager {
    * missing, SqliteLedger.verifyAndRepairSchema() will have already re-created
    * it.  Returns `true` when schema is fully intact.
    */
-  public verifySchemaIntegrity(): boolean {
+  public async verifySchemaIntegrity(): Promise<boolean> {
     if (!this.sqliteLedger) {
       return false;
     }
-    return this.sqliteLedger.isSchemaIntact();
+    return this.sqliteLedger.query('isSchemaIntact');
   }
 
   // ─── Accessors ─────────────────────────────────────────────────────────────
@@ -122,19 +119,9 @@ export class DatabaseManager {
   /**
    * Stores a file summary in SQLite and updates the vector search index simultaneously.
    */
-  public async saveFileSummary(summary: FileSummary): Promise<void> {
-    this.sqlite.saveFileSummary(summary);
-
-    if (!summary.isEncrypted) {
-      await this.vector.indexSummary({
-        filePath: summary.filePath,
-        relativePath: summary.relativePath,
-        summary: summary.summary,
-      });
-    } else {
-      // If encrypted, remove from plain vector search index
-      await this.vector.removeSummary(summary.filePath);
-    }
+  public async saveFileSummary(summary: FileSummary, chunks: ASTChunk[] = []): Promise<void> {
+    await this.vector.replaceFile(summary.filePath, summary.isEncrypted ? undefined : summary, chunks);
+    await this.sqlite.saveFileSummary(summary);
   }
 
   /**
@@ -148,10 +135,8 @@ export class DatabaseManager {
    * Removes a file summary from both SQLite and vector search, clearing chunks and dependencies.
    */
   public async deleteFileSummary(filePath: string): Promise<void> {
-    this.sqlite.deleteFileSummary(filePath);
-    this.sqlite.clearDependenciesForFile(filePath);
-    await this.vector.removeSummary(filePath);
-    await this.vector.removeChunksForFile(filePath);
+    await this.vector.replaceFile(filePath, undefined, []);
+    await this.sqlite.deleteFileSummary(filePath);
   }
 
   /**
@@ -180,7 +165,7 @@ export class DatabaseManager {
   /**
    * Adds an error / post-mortem note to the branch ledger.
    */
-  public addErrorNote(entry: ErrorLedgerEntry): number {
+  public addErrorNote(entry: ErrorLedgerEntry): Promise<number> {
     return this.sqlite.addErrorNote(entry);
   }
 
@@ -217,16 +202,16 @@ export class DatabaseManager {
   /**
    * Persists the active session state and plan progress to SQLite.
    */
-  public saveSessionState(state: {
+  public async saveSessionState(state: {
     activeTask?: string;
     completedTasks?: string[];
     pendingTasks?: string[];
     lastPlanSnapshot: string;
     activeFilePath?: string;
     timestamp?: number;
-  }): void {
+  }): Promise<void> {
     if (this.sqliteLedger) {
-      this.sqliteLedger.saveSessionState(state);
+      await this.sqliteLedger.saveSessionState(state);
     }
   }
 
@@ -247,9 +232,9 @@ export class DatabaseManager {
   /**
    * Clears the persisted session state from SQLite.
    */
-  public clearSessionState(): void {
+  public async clearSessionState(): Promise<void> {
     if (this.sqliteLedger) {
-      this.sqliteLedger.clearSessionState();
+      await this.sqliteLedger.clearSessionState();
     }
   }
 
@@ -263,15 +248,16 @@ export class DatabaseManager {
     errorNotesCount: number;
     vectorIndexedCount: number;
   }> {
-    return {
-      fileSummariesCount: this.sqliteLedger ? this.sqliteLedger.getFileSummariesCount() : 0,
-      errorNotesCount: this.sqliteLedger ? this.sqliteLedger.getErrorNotesCount() : 0,
-      vectorIndexedCount: this.vectorEngine ? await this.vectorEngine.getCount() : 0,
-    };
+    const [fileSummariesCount, errorNotesCount, vectorIndexedCount] = await Promise.all([
+      this.sqliteLedger?.query('getFileSummariesCount') ?? 0,
+      this.sqliteLedger?.query('getErrorNotesCount') ?? 0,
+      this.vectorEngine?.getCount() ?? 0,
+    ]);
+    return { fileSummariesCount, errorNotesCount, vectorIndexedCount };
   }
 
   /**
-   * Synchronously flushes both SQLite and Orama data to disk.
+   * Retains the existing explicit flush API. Mutations already persist under their locks.
    */
   public async flushToDisk(): Promise<void> {
     if (this.sqliteLedger) {
@@ -286,14 +272,12 @@ export class DatabaseManager {
    * Closes database instances and persists everything to disk.
    */
   public async close(): Promise<void> {
-    if (this.sqliteLedger) {
-      this.sqliteLedger.close();
-      this.sqliteLedger = null;
-    }
-    if (this.vectorEngine) {
-      await this.vectorEngine.close();
-      this.vectorEngine = null;
-    }
+    this.closed = true;
     this.isInitialized = false;
+    const sqlite = this.sqliteLedger;
+    const vector = this.vectorEngine;
+    this.sqliteLedger = null;
+    this.vectorEngine = null;
+    await Promise.all([sqlite?.close(), vector?.close()]);
   }
 }

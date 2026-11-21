@@ -24,6 +24,13 @@ import { LeanTraceabilityTracker } from './task/traceability.js';
 import { WorkspaceIsolationManager } from './core/workspace.js';
 import { KnowledgeGraphEngine } from './context/graph.js';
 import { PreBootContextProvider } from './context/preboot.js';
+import { registerChatParticipant } from './ide/chat.js';
+import { AGENT_INSTRUCTION_FILES, updateAgentInstructions } from './context/instructions.js';
+import { getLeanRulesContext } from './context/leanRules.js';
+import { getZeroFluffModeContext, getZeroTrustSecurityPersonaContext } from './context/security.js';
+import { installSkillAndMcp } from './mcp/install.js';
+import { isWorkspacePath, withAsyncFileLock } from './core/files.js';
+import { drainWithin } from './core/workQueue.js';
 import { AsyncASTParser } from './ast/asyncParser.js';
 
 // ─── Module-level singletons (scoped per extension host activation) ──────────
@@ -44,6 +51,10 @@ let astChunker: ASTContextChunker | null = null;
 let traceabilityTracker: LeanTraceabilityTracker | null = null;
 let graphEngine: KnowledgeGraphEngine | null = null;
 let preBootProvider: PreBootContextProvider | null = null;
+let activationContext: vscode.ExtensionContext | undefined;
+let shutdown: AbortController | undefined;
+let fileWatcher: ReturnType<typeof setupAntiLoopFileWatcher> | undefined;
+let backgroundIndex: Promise<unknown> | undefined;
 
 /** StatusBar item showing ReMem state with a toggle/sync click handler. */
 let statusBarItem: vscode.StatusBarItem | undefined;
@@ -63,6 +74,9 @@ const SCRATCHPAD_STATE_KEY = 'remem.scratchpadContent';
  * automatically on every workspace open — no manual command required.
  */
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
+  activationContext = context;
+  shutdown = new AbortController();
+  const signal = shutdown.signal;
   outputChannel = vscode.window.createOutputChannel(CONFIG.OUTPUT_CHANNEL_NAME);
   context.subscriptions.push(outputChannel);
 
@@ -73,6 +87,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // reports "command 'remem.X' not found" whenever activation exits early
   // (e.g. no workspace folder open, or a dependency fails to initialise).
   context.subscriptions.push(
+    vscode.commands.registerCommand('remem.installSkill', async () => {
+      const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+      if (!root) return vscode.window.showWarningMessage('ReMem: No workspace folder is open.');
+      try {
+        await installSkillAndMcp(fs.realpathSync(root), context.asAbsolutePath('out'), isZeroFluffModeEnabled());
+        return vscode.window.showInformationMessage('ReMem: Installed workspace skill and MCP configuration.');
+      } catch (error) {
+        return vscode.window.showErrorMessage(`ReMem: Installation failed. ${error}`);
+      }
+    }),
     vscode.commands.registerCommand('remem.status', () => {
       const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
       if (!root) { vscode.window.showWarningMessage('ReMem: No workspace folder is open.'); return; }
@@ -134,6 +158,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   try {
     dbManager = new DatabaseManager();
     await dbManager.initialize(workspaceIsolation.workspaceRoot);
+    signal.throwIfAborted();
     pipeline = new SummarizerPipeline(dbManager);
 
     outputChannel.appendLine(`[ReMem Database] SQLite ledger and Orama vector search initialized for workspace.`);
@@ -147,121 +172,109 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     pipeline.setVault(vaultStorage, vaultSession);
     outputChannel.appendLine(`[ReMem Vault] Secure Secrets Vault initialized (backed by native SecretStorage).`);
 
-    // ── Scratchpad Manager (.recall_scratchpad.md) (Workspace-Scoped State) ─
-    scratchpad = new ScratchpadManager(workspaceRoot);
     const persistedContent = context.workspaceState.get<string>(SCRATCHPAD_STATE_KEY);
-    const wasRestored = scratchpad.restoreState(persistedContent);
-    outputChannel.appendLine(
-      wasRestored
-        ? `[ReMem Scratchpad] Scratchpad state restored from workspace session.`
-        : `[ReMem Scratchpad] Scratchpad initialized with default template.`
-    );
-
-    // ── Universal Session State: persist task progress to SQLite on every ──
-    // scratchpad write, enabling cross-model resume via the RESUME STATE block.
-    scratchpad.onContentChange((newContent: string) => {
-      if (!dbManager) return;
+    scratchpad = new ScratchpadManager(workspaceRoot);
+    await scratchpad.restoreState(persistedContent);
+    const syncScratchpad = async () => {
       try {
-        // Parse completed / pending tasks from the markdown checklist in scratchpad
-        const lines = newContent.split(/\r?\n/);
-        const completedTasks: string[] = [];
-        const pendingTasks: string[] = [];
-        let activeTask: string | undefined;
-
-        for (const line of lines) {
-          const doneMatch = line.match(/^\s*[-*+]\s+\[[xX]\]\s+(.+)$/);
-          if (doneMatch) {
-            completedTasks.push(doneMatch[1].trim());
-            continue;
-          }
-          const pendingMatch = line.match(/^\s*[-*+]\s+\[\s*\]\s+(.+)$/);
-          if (pendingMatch) {
-            const taskText = pendingMatch[1].trim();
-            pendingTasks.push(taskText);
-            if (!activeTask) {
-              activeTask = taskText; // First pending item is the active task
-            }
-          }
-        }
-
-        dbManager.saveSessionState({
-          activeTask,
-          completedTasks,
-          pendingTasks,
-          lastPlanSnapshot: newContent.slice(0, 1200),
-          activeFilePath: vscode.window.activeTextEditor?.document.uri.fsPath,
-          timestamp: Date.now(),
-        });
-      } catch {
-        // Non-fatal: session state persistence failure should never crash the extension
+        if (dbManager?.isReady) await scratchpad?.syncSessionState(dbManager, vscode.window.activeTextEditor?.document.uri.fsPath);
+      } catch (error) {
+        outputChannel?.appendLine(`[ReMem] Scratchpad sync failed: ${error}`);
       }
-    });
+    };
+    await syncScratchpad();
 
-    // ── AST Dependency Analyzer & Context Chunker (Async / Worker Threads) ──
     astAnalyzer = new ASTAnalyzer();
     await astAnalyzer.initialize();
-    astAnalyzer.buildDependencyGraph(workspaceRoot).catch((err) => {
-      outputChannel?.appendLine(`[ReMem AST Error] Dependency scan error: ${err}`);
-    });
-
     astChunker = new ASTContextChunker();
     traceabilityTracker = new LeanTraceabilityTracker(workspaceRoot, dbManager, astAnalyzer);
-    traceabilityTracker.scanWorkspace(150).catch(() => { });
-
-    // ── Persistent Knowledge Graph ("Graphify") & Pre-Boot Context Provider ─
-    graphEngine = new KnowledgeGraphEngine(workspaceRoot, dbManager, astAnalyzer);
+    graphEngine = new KnowledgeGraphEngine(workspaceRoot, dbManager);
     preBootProvider = new PreBootContextProvider(workspaceRoot, graphEngine, dbManager);
-    preBootProvider.registerChatParticipant(context);
-    // Generate initial persistent architecture map silently in background
-    graphEngine.updateContextFeedSilently().catch(() => { });
+    registerChatParticipant(preBootProvider, context, () => [
+      getZeroFluffModeContext(isZeroFluffModeEnabled()),
+      getLeanRulesContext(),
+      getZeroTrustSecurityPersonaContext(),
+    ].filter(Boolean).join('\n\n'));
+
+    const syncInstructions = async () => {
+      try { await updateAgentInstructions(workspaceRoot, isZeroFluffModeEnabled(), signal); }
+      catch (error) { outputChannel?.appendLine(`[ReMem] Instruction sync failed: ${error}`); }
+    };
+    await syncInstructions();
+    context.subscriptions.push(vscode.workspace.onDidChangeConfiguration((event) => {
+      if (event.affectsConfiguration('remem.ZeroFluffMode')) syncInstructions();
+    }));
+
+    const watchWorkspaceFile = (relative: string) => {
+      const watcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(workspaceFolders[0], relative));
+      context.subscriptions.push(watcher);
+      return watcher;
+    };
+    const scratchpadWatcher = watchWorkspaceFile(CONFIG.SCRATCHPAD_FILE_NAME);
+    context.subscriptions.push(scratchpadWatcher.onDidChange(syncScratchpad), scratchpadWatcher.onDidCreate(syncScratchpad),
+      scratchpadWatcher.onDidDelete(syncScratchpad));
+    const feedWatcher = watchWorkspaceFile('.remem_context_feed.md');
+    context.subscriptions.push(feedWatcher.onDidDelete(() => {
+      if (dbManager?.isReady) graphEngine?.updateContextFeedSilently().catch((error) => outputChannel?.appendLine(String(error)));
+    }));
+    for (const file of AGENT_INSTRUCTION_FILES) {
+      const watcher = watchWorkspaceFile(file);
+      context.subscriptions.push(watcher.onDidChange(syncInstructions), watcher.onDidDelete(syncInstructions));
+    }
 
     // ── Anti-Loop File Watcher (strict 1200ms debounce & internal file filters)
-    setupAntiLoopFileWatcher(context, dbManager, pipeline, outputChannel, traceabilityTracker, graphEngine);
+    taskTracker = new SpecTaskTracker(workspaceRoot, scratchpad, outputChannel, vscode.window.showInformationMessage);
+    fileWatcher = setupAntiLoopFileWatcher(context, dbManager, pipeline, outputChannel, traceabilityTracker, graphEngine,
+      () => taskTracker?.syncProgress(false) ?? Promise.resolve());
 
     // ── Git State Watcher ──────────────────────────────────────────────────
     gitWatcher = new GitStateWatcher(workspaceRoot, dbManager, outputChannel);
-    gitWatcher.setPipeline(pipeline); // wire in pipeline for remote-sync auto-summarization
+    gitWatcher.setPipeline(pipeline, traceabilityTracker, graphEngine, fileWatcher.add);
     await gitWatcher.initialize(context);
 
     // ── Initial background workspace indexation ────────────────────────────
-    indexWorkspace(workspaceRoot, dbManager, pipeline, outputChannel).catch((err) => {
-      outputChannel?.appendLine(`[ReMem Indexer Error] Background indexing failed: ${err}`);
-    });
+    const database = dbManager;
+    const engine = graphEngine;
+    const rebuild = database.vector.needsRebuild;
+    backgroundIndex = indexWorkspace(workspaceRoot, database, pipeline, outputChannel, traceabilityTracker, signal)
+      .then(async () => {
+        signal.throwIfAborted();
+        if (rebuild) {
+          await database.rehydrateVectorIndexFromSqlite();
+          await database.vector.finishRecovery();
+        }
+        await engine.updateContextFeedSilently(signal);
+      }).catch((error) => {
+        if (!signal.aborted) outputChannel?.appendLine(`[ReMem Indexer Error] Background indexing failed: ${error}`);
+      });
 
-    // ── Spec & Task Sync Engine (Zero Fluff Mode Pattern) ────────────────────
-    taskTracker = new SpecTaskTracker(workspaceRoot, scratchpad, outputChannel);
+    // ── Spec & Task Sync Engine ────────────────────
     await taskTracker.syncProgress(false);
 
-    // ── Local Diff Auditor (CodeRabbit Pattern) ────────────────────────────
-    diffAuditor = new LocalDiffAuditor(workspaceRoot, dbManager, astAnalyzer, scratchpad, outputChannel);
+    // ── Local Diff Auditor ────────────────────────────
+    diffAuditor = new LocalDiffAuditor(workspaceRoot, dbManager, astAnalyzer, scratchpad, outputChannel, (message, warning) => {
+      if (warning) vscode.window.showWarningMessage(message);
+      else vscode.window.showInformationMessage(message);
+    });
 
     // ── Tech Debt Ledger (Lean Engine) ─────────────────────────────────────
     techDebtLedger = new TechDebtLedger(workspaceRoot, scratchpad, outputChannel);
 
-    // ── Auto-sync task progress on document save ───────────────────────────
-    const taskSaveWatcher = vscode.workspace.onDidSaveTextDocument((doc) => {
-      if (taskTracker && doc.uri.scheme === 'file') {
-        const docPath = doc.uri.fsPath;
-        const fileName = path.basename(docPath).toLowerCase();
-        if (fileName.endsWith('.md') || !shouldIgnorePath(docPath)) {
-          taskTracker.syncProgress(false).catch(() => { });
-        }
-      }
-    });
-    context.subscriptions.push(taskSaveWatcher);
-
     // ── Periodically persist scratchpad to workspaceState (no cross-window bleed)
     const scratchpadPersistTimer = setInterval(() => {
       if (scratchpad) {
-        const content = scratchpad.getPlan();
-        context.workspaceState.update(SCRATCHPAD_STATE_KEY, content);
+        void scratchpad.getPlanAsync().then(async (content) => {
+          if (!signal.aborted) await context.workspaceState.update(SCRATCHPAD_STATE_KEY, content);
+        })
+          .catch((error) => outputChannel?.appendLine(String(error)));
       }
     }, 60_000); // every 60 seconds
     context.subscriptions.push({ dispose: () => clearInterval(scratchpadPersistTimer) });
 
   } catch (err) {
     outputChannel.appendLine(`[ReMem Database Error] Failed to initialize database: ${err}`);
-    vscode.window.showErrorMessage(`ReMem Database initialization failed: ${err}`);
+    if (!signal.aborted) vscode.window.showErrorMessage(`ReMem Database initialization failed: ${err}`);
+    return;
   }
 
   outputChannel.appendLine(`[ReMem] ReMem Context Engine activated successfully.`);
@@ -274,24 +287,26 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
  * Ensures in-memory databases are exported and flushed to disk, and vault keys are wiped.
  */
 export async function deactivate(): Promise<void> {
-  if (vaultSession) {
-    vaultSession.lock();
-    vaultSession = null;
-    vaultStorage = null;
+  shutdown?.abort();
+  const watchersStopped = fileWatcher?.stop();
+  const gitStopped = gitWatcher?.stop();
+  for (const subscription of activationContext?.subscriptions ?? []) {
+    if (subscription !== outputChannel && subscription !== statusBarItem) subscription.dispose();
   }
+  activationContext = undefined;
+  scratchpad?.stop();
+  vaultSession?.lock();
+  vaultSession = null;
+  vaultStorage = null;
+  fileWatcher = undefined;
+  gitWatcher = null;
+  AsyncASTParser.disposeShared();
 
-  if (gitWatcher) {
-    gitWatcher.dispose();
-    gitWatcher = null;
-  }
-
-  if (dbManager) {
-    outputChannel?.appendLine(`[ReMem] Persisting databases to disk before deactivation...`);
-    await dbManager.close();
-    dbManager = null;
-    pipeline = null;
-  }
-
+  const closing = dbManager?.close();
+  await drainWithin(Promise.allSettled([watchersStopped, gitStopped, backgroundIndex, closing]));
+  backgroundIndex = undefined;
+  dbManager = null;
+  pipeline = null;
   astAnalyzer = null;
   scratchpad = null;
   diffAuditor = null;
@@ -301,8 +316,6 @@ export async function deactivate(): Promise<void> {
   graphEngine = null;
   preBootProvider = null;
   workspaceIsolation = null;
-
-  AsyncASTParser.getInstance().dispose();
 
   if (statusBarItem) {
     statusBarItem.dispose();
@@ -344,7 +357,7 @@ async function performSessionRecovery(
   const dbPath = `${memDir}/${CONFIG.DB_FILE_NAME}`;
 
   // ── 1. Schema integrity ──────────────────────────────────────────────────
-  const schemaOk = dbManager.verifySchemaIntegrity();
+  const schemaOk = await dbManager.verifySchemaIntegrity();
   outputChannel?.appendLine(
     schemaOk
       ? `[ReMem Recovery] Schema integrity: ✅ intact.`
@@ -352,10 +365,9 @@ async function performSessionRecovery(
   );
 
   // ── 2. Vector index re-hydration ─────────────────────────────────────────
-  const vectorCount = await dbManager.getStats().then((s) => s.vectorIndexedCount);
-  const sqliteCount = await dbManager.getStats().then((s) => s.fileSummariesCount);
+  const { vectorIndexedCount: vectorCount, fileSummariesCount: sqliteCount } = await dbManager.getStats();
 
-  if (sqliteCount > 0 && vectorCount === 0) {
+  if (sqliteCount > 0 && vectorCount === 0 && !dbManager.vector.needsRebuild) {
     outputChannel?.appendLine(
       `[ReMem Recovery] Orama index is empty but SQLite has ${sqliteCount} summaries. ` +
       `Re-hydrating vector index from disk…`
@@ -518,8 +530,10 @@ async function handleGetContextCommand(): Promise<void> {
   const activeBranch = gitWatcher?.activeBranch;
 
   const assembledContext = await assembleContext(dbManager, scratchpad, astAnalyzer, {
-    activeFilePath,
+    activeFilePath: activeFilePath && isWorkspacePath(scratchpad.rootPath, activeFilePath) && !shouldIgnorePath(activeFilePath)
+      ? activeFilePath : undefined,
     activeBranch,
+    zeroFluffMode: isZeroFluffModeEnabled(),
     taskTracker: taskTracker || undefined,
     astChunker: astChunker || undefined,
     traceabilityTracker: traceabilityTracker || undefined,
@@ -555,7 +569,8 @@ async function handleReviewDiffCommand(): Promise<void> {
       cancellable: false,
     },
     async () => {
-      const report = await diffAuditor!.auditDiff();
+      const spec = await taskTracker?.syncProgress(false);
+      const report = await diffAuditor!.auditDiff(spec);
       if (!report) {
         return;
       }
@@ -740,7 +755,7 @@ async function handleShowErrorContextCommand(): Promise<void> {
   const activeFile = activeEditor?.document.uri.fsPath;
   const activeBranch = gitWatcher?.activeBranch;
 
-  const errorContext = getFormattedErrorContext(dbManager, activeFile, activeBranch);
+  const errorContext = await getFormattedErrorContext(dbManager, activeFile, activeBranch);
 
   if (!errorContext) {
     vscode.window.showInformationMessage('No error ledger or rollback notes logged for current context.');
@@ -770,7 +785,8 @@ async function handleReindexCommand(workspaceRoot: string): Promise<void> {
       cancellable: false,
     },
     async () => {
-      const result = await indexWorkspace(workspaceRoot, dbManager!, pipeline!, outputChannel);
+      const result = await indexWorkspace(workspaceRoot, dbManager!, pipeline!, outputChannel, traceabilityTracker || undefined, shutdown?.signal);
+      await graphEngine?.updateContextFeedSilently();
       vscode.window.showInformationMessage(
         `ReMem Indexing Complete: ${result.indexedCount} updated, ${result.skippedCount} cached (unchanged).`
       );
@@ -849,6 +865,10 @@ async function openOrCreateScratchpad(): Promise<void> {
  * When Zero Fluff Mode is active the context feed is stripped to raw code, paths, and
  * terminal commands only — no pleasantries, no explanations.
  */
+function isZeroFluffModeEnabled(): boolean {
+  return vscode.workspace.getConfiguration('remem').get<boolean>('ZeroFluffMode', false);
+}
+
 async function handleToggleZeroFluffModeCommand(): Promise<void> {
   const config = vscode.workspace.getConfiguration('remem');
   const current = config.get<boolean>('ZeroFluffMode', false);
@@ -879,77 +899,30 @@ async function purgeMemory(workspaceRoot: string, context: vscode.ExtensionConte
       vaultSession.lock();
     }
 
-    if (dbManager) {
-      await dbManager.close();
-      dbManager = null;
-      pipeline = null;
-    }
-
+    if (!dbManager || !pipeline) return;
     const memDir = getMemoryDirPath(workspaceRoot);
-    if (fs.existsSync(memDir)) {
-      fs.rmSync(memDir, { recursive: true, force: true });
-    }
+    const database = dbManager;
+    const ledgerFile = path.join(memDir, CONFIG.DB_FILE_NAME);
+    const vectorFile = path.join(memDir, CONFIG.VECTOR_INDEX_FILE_NAME);
 
-    ensureMemoryDirectory(workspaceRoot);
-
-    dbManager = new DatabaseManager();
-    await dbManager.initialize(workspaceRoot);
-    pipeline = new SummarizerPipeline(dbManager);
+    // Preserve the lock files while removing the corresponding snapshots.
+    await withAsyncFileLock(vectorFile, async () => {
+      await withAsyncFileLock(ledgerFile, () => {
+        for (const filename of fs.readdirSync(memDir)) {
+          if (filename.endsWith('.lock') || filename === 'files') continue;
+          fs.rmSync(path.join(memDir, filename), { recursive: true, force: true });
+        }
+      });
+    });
     vaultStorage = new VaultStorage(workspaceRoot);
     vaultSession = new VaultSessionManager(context.secrets, workspaceRoot, outputChannel);
     pipeline.setVault(vaultStorage, vaultSession);
-
-    // Re-initialize diffAuditor and taskTracker
-    if (astAnalyzer && scratchpad) {
-      taskTracker = new SpecTaskTracker(workspaceRoot, scratchpad, outputChannel);
-      diffAuditor = new LocalDiffAuditor(workspaceRoot, dbManager, astAnalyzer, scratchpad, outputChannel);
-    }
-
-    // Re-wire the scratchpad → SQLite session state callback to the new dbManager
-    // (The old callback's closure reference was nulled out above, so we need a fresh one)
-    if (scratchpad) {
-      scratchpad.onContentChange((newContent: string) => {
-        if (!dbManager) return;
-        try {
-          const lines = newContent.split(/\r?\n/);
-          const completedTasks: string[] = [];
-          const pendingTasks: string[] = [];
-          let activeTask: string | undefined;
-          for (const line of lines) {
-            const doneMatch = line.match(/^\s*[-*+]\s+\[[xX]\]\s+(.+)$/);
-            if (doneMatch) { completedTasks.push(doneMatch[1].trim()); continue; }
-            const pendingMatch = line.match(/^\s*[-*+]\s+\[\s*\]\s+(.+)$/);
-            if (pendingMatch) {
-              const taskText = pendingMatch[1].trim();
-              pendingTasks.push(taskText);
-              if (!activeTask) { activeTask = taskText; }
-            }
-          }
-          dbManager.saveSessionState({
-            activeTask, completedTasks, pendingTasks,
-            lastPlanSnapshot: newContent.slice(0, 1200),
-            activeFilePath: vscode.window.activeTextEditor?.document.uri.fsPath,
-            timestamp: Date.now(),
-          });
-        } catch { /* non-fatal */ }
-      });
-    }
-
-    // Update preBootProvider with the fresh dbManager after purge
-    if (preBootProvider) {
-      preBootProvider.setDatabaseManager(dbManager);
-    }
-
-    // Also clear the persisted scratchpad content from workspaceState (isolated per window)
     await context.workspaceState.update(SCRATCHPAD_STATE_KEY, undefined);
-
-    if (graphEngine) {
-      await graphEngine.updateContextFeedSilently().catch(() => { });
-    }
-
-    if (scratchpad) {
-      scratchpad.clearPlan();
-    }
+    await scratchpad?.clearPlan();
+    // Reload or recreate the relational schema before consumers read it.
+    await database.sqlite.verifyAndRepairSchema();
+    await indexWorkspace(workspaceRoot, database, pipeline, outputChannel, traceabilityTracker || undefined, shutdown?.signal);
+    await graphEngine?.updateContextFeedSilently();
 
     vscode.window.showInformationMessage('ReMem: Local memory directory and databases purged and reset.');
     outputChannel?.appendLine(`[ReMem] Local memory and databases purged and reset.`);

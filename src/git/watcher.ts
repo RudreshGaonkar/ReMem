@@ -1,11 +1,13 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import * as crypto from 'crypto';
 import * as vscode from 'vscode';
 import { simpleGit, SimpleGit } from 'simple-git';
 import { DatabaseManager } from '../database/index.js';
 import { promptForPostMortem } from './prompt.js';
 import { SummarizerPipeline } from '../summarizer/pipeline.js';
+import { refreshIndexedFile } from '../summarizer/workspaceIndex.js';
+import type { LeanTraceabilityTracker } from '../task/traceability.js';
+import type { KnowledgeGraphEngine } from '../context/graph.js';
 import { shouldIgnorePath } from '../config.js';
 
 /**
@@ -22,8 +24,14 @@ export class GitStateWatcher {
   private workspaceRoot: string;
   private dbManager: DatabaseManager;
   private pipeline: SummarizerPipeline | null = null;
+  private traceability?: LeanTraceabilityTracker;
+  private graph?: KnowledgeGraphEngine;
   private outputChannel?: vscode.OutputChannel;
 
+  private readonly shutdown = new AbortController();
+  private enqueueFile?: (file: string) => void;
+  private remoteSweep?: Promise<RemoteSyncResult>;
+  private rerunRemoteSweep = false;
   private currentBranch: string = '';
   private lastCommitHash: string = '';
 
@@ -39,22 +47,22 @@ export class GitStateWatcher {
   /** Tracks file paths that were present in the last known git index snapshot. */
   private lastIndexedPaths: Set<string> = new Set();
 
-  /** SHA-256 of FETCH_HEAD at last remote-sync check – avoids redundant sweeps. */
-  private lastFetchHeadHash: string = '';
-
   constructor(workspaceRoot: string, dbManager: DatabaseManager, outputChannel?: vscode.OutputChannel) {
     this.workspaceRoot = workspaceRoot;
     this.dbManager = dbManager;
     this.outputChannel = outputChannel;
-    this.git = simpleGit(workspaceRoot);
+    this.git = simpleGit(workspaceRoot, { abort: this.shutdown.signal, timeout: { block: 2000 } });
   }
 
   /**
    * Attaches a SummarizerPipeline so the remote-sync watcher can auto-summarize
    * incoming files. Call this immediately after constructing, before initialize().
    */
-  public setPipeline(pipeline: SummarizerPipeline): void {
+  public setPipeline(pipeline: SummarizerPipeline, traceability?: LeanTraceabilityTracker, graph?: KnowledgeGraphEngine, enqueueFile?: (file: string) => void): void {
     this.pipeline = pipeline;
+    this.traceability = traceability;
+    this.graph = graph;
+    this.enqueueFile = enqueueFile;
   }
 
   /**
@@ -176,7 +184,8 @@ export class GitStateWatcher {
     // 1 200 ms debounce – git writes several files atomically; we wait for the dust to settle
     this.remoteSyncDebounce = setTimeout(async () => {
       try {
-        await this.runRemoteSyncSweep();
+        if (this.remoteSweep) this.rerunRemoteSweep = true;
+        else await this.runRemoteSyncSweep(true);
       } catch (err) {
         this.outputChannel?.appendLine(`[ReMem Git Sync Error] Remote sync sweep failed: ${err}`);
       }
@@ -191,20 +200,20 @@ export class GitStateWatcher {
    *      SQLite `file_summaries` hash column.
    *   4. Triggers background summarization for every file whose hash differs.
    */
-  public async runRemoteSyncSweep(): Promise<RemoteSyncResult> {
-    const result: RemoteSyncResult = { detectedFiles: [], summarizedCount: 0, skippedCount: 0 };
-
-    // ── Guard: only act when FETCH_HEAD actually changed ─────────────────────
-    const fetchHeadPath = path.join(this.workspaceRoot, '.git', 'FETCH_HEAD');
-    if (fs.existsSync(fetchHeadPath)) {
-      const raw = fs.readFileSync(fetchHeadPath, 'utf8');
-      const currentFetchHash = crypto.createHash('sha256').update(raw, 'utf8').digest('hex');
-      if (currentFetchHash === this.lastFetchHeadHash) {
-        // Nothing new since last sweep
-        return result;
+  public runRemoteSyncSweep(background = false): Promise<RemoteSyncResult> {
+    this.remoteSweep ??= this.sweep(background).finally(() => {
+      this.remoteSweep = undefined;
+      if (this.rerunRemoteSweep && !this.shutdown.signal.aborted) {
+        this.rerunRemoteSweep = false;
+        this.handleRemoteSyncEvent();
       }
-      this.lastFetchHeadHash = currentFetchHash;
-    }
+    });
+    return this.remoteSweep;
+  }
+
+  private async sweep(background: boolean): Promise<RemoteSyncResult> {
+    this.shutdown.signal.throwIfAborted();
+    const result: RemoteSyncResult = { detectedFiles: [], summarizedCount: 0, skippedCount: 0 };
 
     if (!this.pipeline) {
       this.outputChannel?.appendLine(
@@ -214,19 +223,10 @@ export class GitStateWatcher {
     }
 
     // ── Determine changed files via git diff ──────────────────────────────────
-    let changedFiles: string[] = [];
-    try {
-      // Get files changed between the previous commit and current HEAD
-      const diffSummary = await this.git.diffSummary(['HEAD@{1}', 'HEAD']).catch(() => null);
-      if (diffSummary && diffSummary.files.length > 0) {
-        changedFiles = diffSummary.files
-          .map((f) => path.join(this.workspaceRoot, f.file))
-          .filter((fp) => !shouldIgnorePath(fp) && fs.existsSync(fp));
-      }
-    } catch {
-      // Fallback: compare current tracked files against last snapshot
-      changedFiles = await this.detectChangedFilesViaSnapshot();
-    }
+    const diffSummary = await this.git.diffSummary(['HEAD@{1}', 'HEAD']).catch(() => null);
+    const changedFiles = diffSummary?.files.length
+      ? diffSummary.files.map((file) => path.join(this.workspaceRoot, file.file)).filter((file) => !shouldIgnorePath(file))
+      : await this.detectChangedFilesViaSnapshot();
 
     // Also refresh snapshot for next sweep
     await this.snapshotTrackedFiles();
@@ -239,37 +239,28 @@ export class GitStateWatcher {
       `[ReMem Git Sync] Remote changes detected — ${changedFiles.length} file(s) to review.`
     );
 
-    // ── Per-file SHA-256 check and summarization ──────────────────────────────
-    for (const filePath of changedFiles) {
-      try {
-        const stats = fs.statSync(filePath);
-        if (stats.isDirectory() || stats.size > 1024 * 1024) {
-          continue; // skip dirs and large binaries
-        }
-
-        const content = fs.readFileSync(filePath, 'utf8');
-        const currentHash = crypto.createHash('sha256').update(content, 'utf8').digest('hex');
-        const existing = this.dbManager.getFileSummary(filePath);
-
-        if (existing && existing.hash === currentHash) {
-          result.skippedCount++;
-          continue; // content identical – already summarized
-        }
-
-        result.detectedFiles.push(filePath);
-        const relativePath = path.relative(this.workspaceRoot, filePath);
-
-        await this.pipeline!.summarizeContent(filePath, relativePath, content);
-        result.summarizedCount++;
-
-        this.outputChannel?.appendLine(
-          `[ReMem Git Sync] Auto-summarized teammate change: ${relativePath}`
-        );
-      } catch {
-        // Binary or unreadable file – skip silently
-        continue;
-      }
+    if (background && this.enqueueFile) {
+      changedFiles.forEach(this.enqueueFile);
+      return result;
     }
+
+    const processFile = async (filePath: string) => {
+      try {
+        if (await refreshIndexedFile(this.dbManager, this.pipeline!, filePath, this.traceability, this.shutdown.signal)) {
+          result.detectedFiles.push(filePath);
+          result.summarizedCount++;
+        } else {
+          result.skippedCount++;
+        }
+      } catch (error) {
+        this.outputChannel?.appendLine(`[ReMem Git Sync] Could not index ${filePath}: ${error}`);
+      }
+    };
+    for (let offset = 0; offset < changedFiles.length; offset += 16) {
+      this.shutdown.signal.throwIfAborted();
+      await Promise.all(changedFiles.slice(offset, offset + 16).map(processFile));
+    }
+    await this.graph?.updateContextFeedSilently(this.shutdown.signal);
 
     // Flush updated summaries to disk
     if (result.summarizedCount > 0) {
@@ -320,12 +311,12 @@ export class GitStateWatcher {
         .filter(Boolean)
         .map((f) => path.join(this.workspaceRoot, f));
 
-      for (const fp of currentFiles) {
-        if (!this.lastIndexedPaths.has(fp)) {
-          changed.push(fp); // new file
-        } else if (fs.existsSync(fp)) {
-          changed.push(fp); // may have changed content – let hash guard catch unchanged
-        }
+      const current = new Set(currentFiles);
+      for (const file of currentFiles) {
+        if (!shouldIgnorePath(file)) changed.push(file);
+      }
+      for (const file of this.lastIndexedPaths) {
+        if (!current.has(file) && !shouldIgnorePath(file)) changed.push(file);
       }
     } catch {
       // Non-fatal
@@ -347,14 +338,19 @@ export class GitStateWatcher {
    */
   public async triggerManualSync(): Promise<RemoteSyncResult> {
     // Reset the FETCH_HEAD guard so a manual trigger always runs
-    this.lastFetchHeadHash = '';
     return this.runRemoteSyncSweep();
   }
 
   /**
    * Disposes all watchers and timers.
    */
+  public async stop(): Promise<void> {
+    this.dispose();
+    await this.remoteSweep?.catch(() => {});
+  }
+
   public dispose(): void {
+    this.shutdown.abort();
     if (this.debounceTimer) {
       clearTimeout(this.debounceTimer);
       this.debounceTimer = null;

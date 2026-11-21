@@ -27,6 +27,18 @@ export const HARDCODED_SECRET_BLOCKLIST: string[] = [
   '.recall_scratchpad.md',
   '.remem_context_feed.md',
   '.git/**',
+  '.agents/',
+  '.agent/',
+  '.antigravity/',
+  '.claude/',
+  '.codex/',
+  '.vscode/',
+  '.mcp.json',
+  'AGENTS.md',
+  'CLAUDE.md',
+  '*.vsix',
+  '*.lock',
+  '*.tmp',
   'node_modules/**',
   'out/**',
   'dist/**',
@@ -47,6 +59,7 @@ export const HARDCODED_SECRET_BLOCKLIST: string[] = [
 export class SecretShield {
   private static instance: SecretShield | null = null;
   private ig: Ignore;
+  private readonly blocked = ignore().add(HARDCODED_SECRET_BLOCKLIST);
   private workspaceRoot: string;
 
   constructor(workspaceRoot: string) {
@@ -72,10 +85,7 @@ export class SecretShield {
   public reload(): void {
     this.ig = ignore();
 
-    // 1. Inject permanent hardcoded secret blocklist
-    this.ig.add(HARDCODED_SECRET_BLOCKLIST);
-
-    // 2. Read and parse workspace .gitignore if it exists
+    // Read and parse workspace .gitignore if it exists
     const gitignorePath = path.join(this.workspaceRoot, '.gitignore');
     if (fs.existsSync(gitignorePath)) {
       try {
@@ -147,7 +157,8 @@ export class SecretShield {
     }
 
     try {
-      return this.ig.ignores(relPath);
+      if (targetPath.endsWith(path.sep)) relPath += '/';
+      return this.blocked.ignores(relPath) || this.ig.ignores(relPath);
     } catch {
       return false;
     }

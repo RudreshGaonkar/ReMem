@@ -19,10 +19,11 @@ export class ASTAnalyzer {
    */
   public async initialize(): Promise<void> {
     try {
-      // `moduleURL` tells web-tree-sitter where to find tree-sitter.wasm at runtime.
+      // Resolve the runtime relative to the installed bundle.
       // esbuild copies the file to out/tree-sitter.wasm alongside out/extension.js.
       const wasmPath = path.join(__dirname, 'tree-sitter.wasm');
-      await Parser.init({ moduleURL: wasmPath });
+      const wasmBinary = await fs.promises.readFile(wasmPath);
+      await Parser.init({ wasmBinary, locateFile: () => wasmPath, print: console.error, printErr: console.error });
       this.isParserReady = true;
     } catch (err) {
       console.warn('[ReMem AST] web-tree-sitter initialization fallback to regex parser:', err);
@@ -162,6 +163,7 @@ export class ASTAnalyzer {
       const relativePath = path.basename(filePath);
       const parsed = await parser.parseAsync(filePath, relativePath, content);
 
+      this.forgetFile(filePath);
       this.exportMap.set(filePath, new Set(parsed.exports));
 
       const resolvedImports = new Set<string>();
@@ -186,12 +188,13 @@ export class ASTAnalyzer {
   /**
    * Processes dependencies for a single file and updates maps synchronously (fallback).
    */
-  public processFileDependencies(filePath: string): void {
+  public processFileDependencies(filePath: string, fileContent?: string): void {
     try {
-      const content = fs.readFileSync(filePath, 'utf8');
+      const content = fileContent ?? fs.readFileSync(filePath, 'utf8');
       const rawImports = this.extractImports(content);
       const exports = this.extractExports(content);
 
+      this.forgetFile(filePath);
       this.exportMap.set(filePath, new Set(exports));
 
       const resolvedImports = new Set<string>();
@@ -213,6 +216,16 @@ export class ASTAnalyzer {
     } catch {
       // Ignore binary or unreadable files
     }
+  }
+
+  public forgetFile(filePath: string): void {
+    for (const imported of this.importMap.get(filePath) ?? []) {
+      const dependents = this.reverseDependencyMap.get(imported);
+      dependents?.delete(filePath);
+      if (dependents?.size === 0) this.reverseDependencyMap.delete(imported);
+    }
+    this.importMap.delete(filePath);
+    this.exportMap.delete(filePath);
   }
 
   /**
