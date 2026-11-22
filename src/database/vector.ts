@@ -220,6 +220,10 @@ export class VectorSearchEngine {
         );
       } catch (err) {
         this.damaged = true;
+        if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+          this.version = '';
+          return;
+        }
         this.orama = await create({ schema });
         this.fileIdMap.clear();
         this.chunkIdMap.clear();

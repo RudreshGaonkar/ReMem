@@ -20,9 +20,18 @@ export class SqliteLedger {
   }
 
   private reload(): void {
-    const version = fileVersion(this.dbFilePath);
+    let version = fileVersion(this.dbFilePath);
     if (this.database && this.version === version) return;
-    const next = new this.SQL!.Database(version ? fs.readFileSync(this.dbFilePath) : undefined);
+    let bytes: Buffer | undefined;
+    if (version) {
+      try {
+        bytes = fs.readFileSync(this.dbFilePath);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+        version = '';
+      }
+    }
+    const next = new this.SQL!.Database(bytes);
     this.database?.close();
     this.database = next;
     this.version = version;
@@ -65,8 +74,8 @@ export class SqliteLedger {
             };
             if (result.damaged) {
               // Keep the original in place until the replacement is ready.
-              await beforePublish();
-              await fs.promises.copyFile(this.dbFilePath, this.dbFilePath + '.corrupted-' + randomUUID(), fs.constants.COPYFILE_EXCL);
+              const damaged = await fs.promises.readFile(this.dbFilePath);
+              await publishAtomic(this.dbFilePath + '.corrupted-' + randomUUID() + '.bak', damaged, beforePublish);
               console.error('[Cuttlehawk SQLite] Recovered a damaged ledger at', this.dbFilePath);
             }
             await publishAtomic(this.dbFilePath, snapshot, beforePublish);
@@ -180,7 +189,7 @@ export class SqliteLedger {
     await this.initializeWasm();
     try {
       const db = this.db;
-      if (!db || !this.isSchemaIntact()) return false;
+      if (!db || !this.version || !this.isSchemaIntact()) return false;
       this.validate(db);
       return db.exec('PRAGMA table_info(file_summaries)')[0]?.values.some((column) => column[1] === 'isEncrypted') ?? false;
     } catch {
@@ -720,8 +729,8 @@ export class SqliteLedger {
     lastPlanSnapshot: string;
     activeFilePath?: string;
     timestamp?: number;
-  }): Promise<void> {
-    return this.write('saveSessionState', [state], () => {
+  }, overwriteSameTimestamp = true): Promise<void> {
+    return this.write('saveSessionState', [state, overwriteSameTimestamp], () => {
       if (!this.db) {
         throw new Error('Database is not initialized.');
       }
@@ -731,8 +740,17 @@ export class SqliteLedger {
       const pendingJson = JSON.stringify(state.pendingTasks || []);
 
       const stmt = this.db.prepare(`
-        INSERT OR REPLACE INTO current_session_state (id, activeTask, completedTasks, pendingTasks, lastPlanSnapshot, activeFilePath, timestamp)
+        INSERT INTO current_session_state (id, activeTask, completedTasks, pendingTasks, lastPlanSnapshot, activeFilePath, timestamp)
         VALUES (1, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+          activeTask = excluded.activeTask,
+          completedTasks = excluded.completedTasks,
+          pendingTasks = excluded.pendingTasks,
+          lastPlanSnapshot = excluded.lastPlanSnapshot,
+          activeFilePath = excluded.activeFilePath,
+          timestamp = excluded.timestamp
+        WHERE excluded.timestamp > current_session_state.timestamp
+          OR (? AND excluded.timestamp = current_session_state.timestamp)
       `);
 
       stmt.run([
@@ -742,6 +760,7 @@ export class SqliteLedger {
         state.lastPlanSnapshot,
         state.activeFilePath || null,
         now,
+        Number(overwriteSameTimestamp),
       ]);
       stmt.free();
     });

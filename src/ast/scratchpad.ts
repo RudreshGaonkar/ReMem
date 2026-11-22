@@ -81,18 +81,18 @@ export class ScratchpadManager {
     await this.editPlan(() => content);
   }
 
-  public async editPlan(edit: (current: string) => string, afterWrite?: () => Promise<void>): Promise<void> {
-    const content = await withAsyncFileLock(this.scratchpadPath, async (assertOwner) => {
+  public async editPlan(edit: (current: string) => string): Promise<number> {
+    const { content, timestamp } = await withAsyncFileLock(this.scratchpadPath, async (assertOwner) => {
       const current = fileVersion(this.scratchpadPath) ? await fs.promises.readFile(this.scratchpadPath, 'utf8') : defaultPlan;
       const next = edit(current);
       if (next !== current || !fileVersion(this.scratchpadPath)) await publishAtomic(this.scratchpadPath, next, assertOwner);
-      await afterWrite?.();
-      return next;
+      return { content: next, timestamp: fs.statSync(this.scratchpadPath).mtimeMs };
     }, this.shutdown.signal);
     // Notify session-state listeners of the change
     for (const cb of this.changeCallbacks) {
       try { cb(content); } catch { /* non-fatal */ }
     }
+    return timestamp;
   }
 
   /**
@@ -158,33 +158,35 @@ export class ScratchpadManager {
   }
 
   public async syncSessionState(db: DatabaseManager, activeFilePath?: string): Promise<void> {
-    await withAsyncFileLock(this.scratchpadPath, async (assertOwner) => {
+    const snapshot = await withAsyncFileLock(this.scratchpadPath, async (assertOwner) => {
       if (!fileVersion(this.scratchpadPath)) {
         await publishAtomic(this.scratchpadPath, defaultPlan, assertOwner);
         return;
       }
       const timestamp = fs.statSync(this.scratchpadPath).mtimeMs;
-      const saved = await db.sqlite.query('getCurrentSessionState');
-      if (saved && saved.timestamp >= timestamp) return;
       const content = await fs.promises.readFile(this.scratchpadPath, 'utf8');
-      if (content === defaultPlan) return;
-      const completedTasks: string[] = [];
-      const pendingTasks: string[] = [];
-      for (const match of content.matchAll(/^\s*[-*+]\s+\[([ xX])\]\s+([^\r\n]+)$/gm)) {
-        const task = match[2].trim();
-        if (task && !/^Step \d+:$/.test(task)) {
-          (match[1] === ' ' ? pendingTasks : completedTasks).push(task);
-        }
-      }
-      await db.saveSessionState({
-        activeTask: pendingTasks[0],
-        completedTasks,
-        pendingTasks,
-        lastPlanSnapshot: content.slice(0, 1200),
-        activeFilePath,
-        timestamp,
-      });
+      return { content, timestamp };
     }, this.shutdown.signal);
+    if (!snapshot || snapshot.content === defaultPlan) return;
+    const { content, timestamp } = snapshot;
+    const saved = await db.sqlite.query('getCurrentSessionState');
+    if (saved && saved.timestamp >= timestamp) return;
+    const completedTasks: string[] = [];
+    const pendingTasks: string[] = [];
+    for (const match of content.matchAll(/^\s*[-*+]\s+\[([ xX])\]\s+([^\r\n]+)$/gm)) {
+      const task = match[2].trim();
+      if (task && !/^Step \d+:$/.test(task)) {
+        (match[1] === ' ' ? pendingTasks : completedTasks).push(task);
+      }
+    }
+    await db.saveSessionState({
+      activeTask: pendingTasks[0],
+      completedTasks,
+      pendingTasks,
+      lastPlanSnapshot: content.slice(0, 1200),
+      activeFilePath,
+      timestamp,
+    }, false);
   }
 
   public async saveCheckpoint(db: DatabaseManager, state: SessionState): Promise<void> {
@@ -192,7 +194,7 @@ export class ScratchpadManager {
     const end = '<!-- /cuttlehawk:checkpoint -->';
     const legacyStart = '<!-- remem:checkpoint -->';
     const legacyEnd = '<!-- /remem:checkpoint -->';
-    await this.editPlan((current) => {
+    const timestamp = await this.editPlan((current) => {
       let first = current.indexOf(start);
       let last = current.indexOf(end);
       let markerEnd = end;
@@ -219,9 +221,8 @@ export class ScratchpadManager {
       ].join('\n');
       return first < 0 ? current.trimEnd() + '\n\n' + block + '\n'
         : current.slice(0, first) + block + current.slice(last + markerEnd.length);
-    }, async () => {
-      await db.saveSessionState({ ...state, timestamp: Math.max(Date.now(), fs.statSync(this.scratchpadPath).mtimeMs) });
     });
+    await db.saveSessionState({ ...state, timestamp });
   }
 
   public stop(): void {

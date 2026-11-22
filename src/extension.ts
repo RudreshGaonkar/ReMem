@@ -919,8 +919,10 @@ async function purgeMemory(workspaceRoot: string, context: vscode.ExtensionConte
     const vectorFile = path.join(memDir, CONFIG.VECTOR_INDEX_FILE_NAME);
 
     // Preserve the lock files while removing the corresponding snapshots.
-    await withAsyncFileLock(vectorFile, async () => {
-      await withAsyncFileLock(ledgerFile, () => {
+    await withAsyncFileLock(vectorFile, async (assertVectorOwner) => {
+      await withAsyncFileLock(ledgerFile, async (assertLedgerOwner) => {
+        await assertVectorOwner();
+        await assertLedgerOwner();
         for (const filename of fs.readdirSync(memDir)) {
           if (filename.endsWith('.lock') || filename === 'files') continue;
           fs.rmSync(path.join(memDir, filename), { recursive: true, force: true });

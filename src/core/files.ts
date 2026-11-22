@@ -3,6 +3,9 @@ import * as path from 'path';
 import { createHash, randomUUID } from 'crypto';
 import { setTimeout as delay } from 'timers/promises';
 
+const LOCK_TTL_MS = 30_000;
+const LOCK_HEARTBEAT_MS = LOCK_TTL_MS / 3;
+
 export function atomicWrite(file: string, content: string | Buffer, mode = 0o600, assertOwner?: () => void): void {
   const temporary = file + '.' + randomUUID() + '.tmp';
   try {
@@ -39,18 +42,24 @@ async function readLock(lock: string) {
       const stat = await handle.stat({ bigint: true });
       if (!stat.isFile()) throw new Error('Expected a regular lock file: ' + lock);
       const content = stat.size <= 4096n ? await handle.readFile('utf8') : '';
-      // Older releases stored only the PID.
+      // Older releases stored a bare PID or used the timestamp key.
       let pid: unknown;
       let token: unknown;
+      let createdAt: unknown;
+      let heartbeatUntil = 0;
       try {
         const metadata = JSON.parse(content);
         pid = typeof metadata === 'number' ? metadata : metadata?.pid;
         token = metadata?.token;
+        createdAt = typeof metadata === 'number' ? Number(stat.mtimeMs) : metadata?.createdAt ?? metadata?.timestamp;
+        if (metadata?.createdAt !== undefined) heartbeatUntil = Number(stat.mtimeMs);
       } catch {
-        // Ownership of a malformed legacy lock cannot be established.
+        // Invalid metadata is reclaimed using the same version guard as a dead owner.
       }
       return {
         token,
+        expiresAt: typeof createdAt === 'number' && Number.isFinite(createdAt) && createdAt > 0
+          ? Math.max(createdAt + LOCK_TTL_MS, heartbeatUntil) : 0,
         version: [stat.ino, stat.ctimeNs, stat.size].join(':'),
         pid: typeof pid === 'number' && Number.isSafeInteger(pid) && pid > 0 && pid <= 0x7fffffff ? pid : undefined,
       };
@@ -64,13 +73,12 @@ async function readLock(lock: string) {
 }
 
 function isStaleLock(owner: NonNullable<Awaited<ReturnType<typeof readLock>>>): boolean {
-  if (owner.pid !== undefined) {
-    try {
-      process.kill(owner.pid, 0);
-    } catch (error) {
-      // EPERM means the process exists but belongs to a different user.
-      if ((error as NodeJS.ErrnoException).code === 'ESRCH') return true;
-    }
+  if (owner.pid === undefined || owner.expiresAt <= Date.now()) return true;
+  try {
+    process.kill(owner.pid, 0);
+  } catch (error) {
+    // EPERM means the process exists but belongs to a different user.
+    if ((error as NodeJS.ErrnoException).code === 'ESRCH') return true;
   }
   return false;
 }
@@ -78,7 +86,8 @@ function isStaleLock(owner: NonNullable<Awaited<ReturnType<typeof readLock>>>): 
 async function createLock(lock: string, token = randomUUID()): Promise<boolean> {
   const temporary = lock + '.' + token + '.tmp';
   try {
-    await fs.promises.writeFile(temporary, JSON.stringify({ pid: process.pid, timestamp: Date.now(), token }), { flag: 'wx', mode: 0o600 });
+    const createdAt = Date.now();
+    await fs.promises.writeFile(temporary, JSON.stringify({ pid: process.pid, createdAt, token }), { flag: 'wx', mode: 0o600 });
     await fs.promises.link(temporary, lock);
     return true;
   } catch (error) {
@@ -128,14 +137,39 @@ async function tryLock(file: string) {
   }
   const token = randomUUID();
   if (!(await createLock(lock, token))) return undefined;
-  const version = await lockVersion(lock);
-  return {
-    release: () => retireLock(lock, version),
-    assertOwner: async () => {
-      const owner = await readLock(lock);
-      if (owner?.version !== version || owner.pid !== process.pid || owner.token !== token) {
-        throw new Error('Lost ownership of ' + lock);
+  const assertOwner = async () => {
+    const owner = await readLock(lock);
+    if (!owner || owner.pid !== process.pid || owner.token !== token || owner.expiresAt <= Date.now()) {
+      throw new Error('Lost ownership of ' + lock);
+    }
+    return owner;
+  };
+  let heartbeat: Promise<void> | undefined;
+  const timer = setInterval(() => {
+    heartbeat ??= (async () => {
+      // Keep the JSON immutable. Update the owned inode's mtime to the new lease deadline.
+      const handle = await fs.promises.open(lock, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+      try {
+        const stat = await handle.stat({ bigint: true });
+        const owner = await assertOwner();
+        if ([stat.ino, stat.ctimeNs, stat.size].join(':') !== owner.version) return;
+        const now = Date.now();
+        if (owner.expiresAt > now) await handle.utimes(Number(stat.atimeMs) / 1000, (now + LOCK_TTL_MS) / 1000);
+      } finally {
+        await handle.close();
       }
+    })().catch(() => {
+      // Retry on the next heartbeat. An expired lease cannot publish.
+    }).finally(() => { heartbeat = undefined; });
+  }, LOCK_HEARTBEAT_MS);
+  timer.unref();
+  return {
+    assertOwner: async () => { await assertOwner(); },
+    release: async () => {
+      clearInterval(timer);
+      await heartbeat;
+      const owner = await readLock(lock);
+      if (owner?.token === token && owner.pid === process.pid) await retireLock(lock, owner.version);
     },
   };
 }

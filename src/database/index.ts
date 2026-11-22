@@ -228,9 +228,9 @@ export class DatabaseManager {
     lastPlanSnapshot: string;
     activeFilePath?: string;
     timestamp?: number;
-  }): Promise<void> {
+  }, overwriteSameTimestamp = true): Promise<void> {
     if (this.sqliteLedger) {
-      await this.sqliteLedger.saveSessionState(state);
+      await this.sqliteLedger.saveSessionState(state, overwriteSameTimestamp);
     }
   }
 
