@@ -195,19 +195,30 @@ The server provides `cuttlehawk://context-feed`, `cuttlehawk://scratchpad`, and 
 
 ---
 
-## Token Optimization Benchmark
+## Context & Token Efficiency (Typical Workflow Comparison)
 
-### Scenario: Modifying an Authentication Middleware Module in a 50-File Repository
+### Scenario: Updating an Auth Middleware Signature in a ~50-File Repo
 
-| Strategy | Context Delivered | Raw Code Tokens | Metadata Tokens | Total Prompt Tokens | Token Savings | Cost & Latency Impact |
-|---|---|---|---|---|---|---|
-| **Raw Full Codebase Scan** | All 50 files sent raw | ~150,000 | 0 | **~150,000** | **0%** (Baseline) | High latency, hits rate limits |
-| **Manual Multi-File Open** | 5 related source files | ~12,500 | 0 | **~12,500** | **91.6%** | Moderate latency, manual overhead |
-| **Cuttlehawk Optimized Injection** | Active file + Blast Radius + Error Ledger + Scratchpad | 0 raw files | ~250 | **~250** | **99.8%** | **Sub-second response, minimal cost** |
+Modern coding agents don't dump an entire repo into one prompt—instead, they spend multiple turns running `grep`/`find` commands and reading 4–6 full files to trace callers before making an edit. Cuttlehawk replaces those discovery turns with a pre-indexed AST blast radius and targeted symbol snippets.
+
+| Approach | How Context Is Gathered | Typical Tokens Consumed | Agent Round-Trips | Trade-off |
+|---|---|---|---|---|
+| **Unindexed Agent Exploration** *(grep + full file reads)* | Agent searches symbols, opens 4–6 dependent files in full (~2,500 tokens each) to check callers | **~10,000 – 15,000** | 3–5 tool turns | Accurate, but burns tokens and latency re-discovering structure every session |
+| **Cuttlehawk Assisted** *(active file + AST blast radius + ledger)* | Active file (~1,200 tokens) + distilled blast-radius call sites & rollback warnings (~600 tokens) | **~1,800 – 2,500** | 1 tool turn (`cuttlehawk_blast_radius`) | **~75–85% fewer discovery tokens**; skips opening unrelated caller files |
+
+> *Note: Actual token savings depend on file sizes and dependency depth. Cuttlehawk reduces discovery overhead—the agent still reads full source files whenever deep implementation edits are needed.*
 
 ---
 
 ## Quick Start & Installation
+
+### CLI Quick Start
+
+Run from the root of the workspace you want to configure.
+
+```bash
+  npm install -g git+https://github.com/RudreshGaonkar/Cuttlehawk.git && cuttlehawk-mcp install
+```
 
 ### Prerequisites
 - Node.js 18.x or newer

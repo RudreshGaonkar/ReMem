@@ -161,6 +161,7 @@
     "package": "vsce package --no-dependencies",
     "install:ide": "npm run package && node scripts/install-ide.cjs",
     "build:mcp": "node esbuild.js --production --mcp",
+    "prepare": "node esbuild.js --production --mcp",
     "prepack": "npm run build",
     "test": "npm run build:mcp && node --test tests/*.test.cjs"
   },
